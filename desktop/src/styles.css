@@ -1,0 +1,27 @@
+body {
+  margin: 0;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: #05080a;
+  color: #d6efdd;
+}
+
+#app {
+  text-align: center;
+}
+
+#error-message {
+  max-width: 32rem;
+  white-space: pre-wrap;
+  color: #ff3d54;
+}
+
+button {
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  cursor: pointer;
+}

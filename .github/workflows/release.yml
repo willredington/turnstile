@@ -1,0 +1,75 @@
+name: Release macOS app
+
+# Push a tag (e.g. `v0.1.1`) and this builds the desktop app and attaches the .dmg to a
+# published GitHub Release for that tag, with auto-generated release notes. macOS only, native
+# arm64 (matches every machine this has been built and tested on so far — GitHub's macos-latest
+# runner is Apple Silicon). No code signing/notarization: this is an unsigned build, so opening
+# it for the first time needs a right-click → Open (or `xattr -cr` on the .app) to get past
+# Gatekeeper's "damaged" warning. Revisit if this is ever meant for people other than us.
+on:
+  push:
+    tags:
+      - 'v*'
+  # Also invoked directly by bump-version.yml after it pushes a new tag: a push made with the
+  # default GITHUB_TOKEN (as that workflow does) doesn't trigger other workflows — GitHub's own
+  # anti-recursion guard — so `push: tags` alone would never fire for a tag that workflow
+  # created. Manually dispatching this yourself works too, but pick an existing tag as the ref;
+  # tagName below just reads whatever ref you ran it against.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Keyed on both lockfiles: prepare-sidecar.mjs (desktop/scripts/prepare-sidecar.mjs)
+      # bundles a ~300MB native `claude` CLI out of the repo root's node_modules alongside the
+      # desktop project's own deps, so both installs are worth caching.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'desktop/bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      # Root deps: prepare-sidecar.mjs's `bun run build` (the turnstile CLI itself) and its ACP
+      # agent bundling both resolve against the repo root's node_modules, not desktop's.
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Turnstile ${{ github.ref_name }}'
+          releaseBody: |
+            ⚠️ **Unsigned build.** macOS will likely say *"Turnstile is damaged and can't be
+            opened"* the first time you open it — that's Gatekeeper reacting to the download's
+            quarantine flag on a build that isn't notarized, not an actual problem with the
+            app. Fix, once per download:
+
+            ```
+            xattr -cr /path/to/Turnstile.app
+            ```
+          generateReleaseNotes: true
+          releaseDraft: false
+          prerelease: false

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["src/adapters/web/ui/main.tsx"],
+  "project": ["src/**/*.{ts,tsx}"],
+  "bun": false
+}

@@ -1,0 +1,3635 @@
+/*
+ * Terminal: a phosphor-green console on a near-black ground, everything set in JetBrains
+ * Mono. Tokens transcribed from the "Turnstile - Terminal Theme" Claude Design handoff.
+ *
+ * This replaces Nocturne, the quiet blue-grey Inter interface that itself replaced
+ * Turnstile's original all-monospace look — see `docs/superpowers/plans/
+ * 2026-09-03-nocturne-review-redesign.md` for that one. The pendulum swung back: the layout
+ * Nocturne arrived at is kept exactly, and only the palette and type change.
+ *
+ * Two things worth knowing before editing the palette:
+ *
+ * - **Green is the whole scheme, so severity cannot be.** Nocturne could grade risk down a
+ *   neutral ramp because its accent was the only hue on screen. Here the chrome is green, so
+ *   a green "high" would read as chrome rather than as alarm. `--high` (red) and `--med`
+ *   (amber) are the design's own answer, and they are the only two hues in the interface that
+ *   are not green — which is what makes them carry.
+ * - **The washes go through `--accent-rgb`/`--text-rgb`.** Roughly fifty rules below tint with
+ *   the accent or the text colour at some alpha. They take the channel triples rather than
+ *   restating a hex, so moving the palette moves them too.
+ */
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+
+:root {
+  --color-bg: #05080a;
+  --color-surface: #0e1412;
+  --color-text: #d6efdd;
+  --color-accent: #3dfc8a;
+  --color-accent-2: #a7ffcd;
+  --color-divider: color-mix(in srgb, var(--color-accent) 14%, transparent);
+
+  /* The channel triples behind every `rgb(… / N%)` wash below. Space-separated so they drop
+     straight into `rgb(var(--accent-rgb) / 12%)`. */
+  --accent-rgb: 61 252 138;
+  --text-rgb: 214 239 221;
+
+  /* Neutrals are not neutral here — they are the green ramp desaturated, so a muted label
+     still belongs to the phosphor rather than going grey against it. */
+  --color-neutral-100: #e8f7ee;
+  --color-neutral-200: #d6efdd;
+  --color-neutral-300: #b9d8c6;
+  --color-neutral-400: #94b5a3;
+  --color-neutral-500: #6f8f7c;
+  --color-neutral-600: #658472;
+  --color-neutral-700: #4a6356;
+  --color-neutral-800: #2c3d34;
+  --color-neutral-900: #16201b;
+
+  --color-accent-100: #e6fff0;
+  --color-accent-200: #c7ffdf;
+  --color-accent-300: #a7ffcd;
+  --color-accent-400: #6bfdaa;
+  --color-accent-500: #3dfc8a;
+  --color-accent-600: #2cc96b;
+  --color-accent-700: #1f8f4d;
+  --color-accent-800: #155c32;
+  --color-accent-900: #0c331c;
+
+  /* A step darker than --color-bg, for a code block (one step under the ground it sits
+     on). */
+  --color-surface-sunken: #030605;
+
+  /* The rail sits *between* the ground and a surface: lifted just enough to separate the
+     left panel and the conversation from the file pane without reading as a card. */
+  --color-rail: #080c0b;
+
+  --font-heading: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-heading-weight: 500;
+  --font-body: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --space-1: 2.8px;
+  --space-2: 5.6px;
+  --space-3: 8.4px;
+  --space-4: 11.2px;
+  --space-6: 16.8px;
+  --space-8: 22.4px;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+
+  --shadow-sm: 0 0 0 1px #3f424d;
+  --shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 0 0 1px #9397ab, 0 16px 40px rgba(0, 0, 0, 0.65);
+
+  /* Turnstile's own semantic names, remapped onto the palette tokens above so the rules below
+     that have not been rewritten for the redesign yet keep working. New rules should prefer
+     the --color- and --space- tokens directly. */
+  --bg: var(--color-bg);
+  --rail: var(--color-rail);
+  --panel: var(--color-surface);
+  --line: var(--color-divider);
+  --text: var(--color-text);
+  --muted: var(--color-neutral-500);
+  --accent: var(--color-accent);
+  /* Terminal keeps Nocturne's mono-accent transcript: "you" is accent, "agent" is neutral.
+     That reads differently here — the agent's turn is the quiet one on a green ground — but
+     it is still the pair that tells the two apart. */
+  --agent: var(--color-neutral-400);
+  --agent-rail: var(--color-neutral-800);
+
+  /* Severity. The only two hues on screen that are not green, which is the whole reason they
+     register — see the note at the top of the file. */
+  --high: #ff3d54;
+  --med: #ffb000;
+  --high-rgb: 255 61 84;
+  --med-rgb: 255 176 0;
+
+  --add: var(--color-accent);
+  --add-wash: rgb(var(--accent-rgb) / 10%);
+  --remove: var(--high);
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --border: var(--line);
+  --add-text: var(--color-accent-300);
+  --del-text: #ffb3bc;
+  --del: rgb(255 61 84 / 12%);
+  --accept: var(--add);
+  --reject: var(--remove);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  /* 13px, not Nocturne's 15px. JetBrains Mono's advance is ~0.6em, so 13px mono sets very
+     close to the width Inter did at 15px — which is what lets the rest of the sheet keep the
+     widths it was tuned to. */
+  font: 13px / 1.55 var(--font-body);
+  font-feature-settings: "ss02" 1;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  margin: 0;
+}
+
+/* ── The design system's own component primitives: buttons, fields ── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  text-decoration: none;
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 14px;
+  line-height: 1.2;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid transparent;
+  padding: var(--space-2) calc(var(--space-3) * 1.2);
+  border-radius: var(--radius-md);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: rgb(var(--accent-rgb) / 8%);
+  box-shadow: 0 0 16px rgb(var(--accent-rgb) / 18%);
+  text-shadow: 0 0 10px rgb(var(--accent-rgb) / 45%);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: rgb(var(--accent-rgb) / 18%);
+}
+
+.btn-primary:active:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+.btn-secondary {
+  border-color: var(--color-divider);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+}
+
+.btn-secondary:active:not(:disabled) {
+  background: color-mix(in srgb, var(--color-text) 14%, transparent);
+}
+
+.btn-secondary.active {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.btn-ghost {
+  color: var(--color-accent);
+  padding-inline: var(--space-1);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.btn-ghost:active:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+.field > label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 5px;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+
+.input {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--color-text);
+  caret-color: var(--color-accent);
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+}
+
+.input:hover {
+  border-color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+.input:focus-visible {
+  border-color: var(--color-accent);
+  outline-offset: 0;
+}
+
+kbd {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-text) 10%, transparent);
+  color: var(--color-neutral-400);
+}
+
+/* ── Session switcher ── */
+
+.session-switcher {
+  position: relative;
+}
+
+.session-switcher-menu {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-height: 320px;
+  padding: var(--space-2);
+  overflow-y: auto;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+
+.session-switcher-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-switcher-item:hover {
+  background: var(--color-accent-900);
+}
+
+.session-switcher-item span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-switcher-time {
+  flex: none;
+  color: var(--color-neutral-600);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.session-switcher-label {
+  margin: var(--space-3) var(--space-3) var(--space-1);
+  color: var(--color-neutral-600);
+  font-family: var(--font-heading);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-switcher-empty {
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-neutral-600);
+  font-size: 12px;
+}
+
+/*
+ * What is worth knowing before you answer.
+ *
+ * Beside the buttons rather than in the banner at the top: these are reasons to hesitate over
+ * this particular decision, and a caveat read thirty lines earlier is one nobody carries down
+ * the page.
+ */
+
+.transcript {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Always drawn, not only while scrolling. An overlay scrollbar that fades away leaves no
+     sign that there is anything above the fold, which on a column that streams for minutes is
+     the one thing a reader needs to know. It sits at the pane's outer edge — the 760px
+     measure below is the reading column, not the scroll container. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+/* The reading column: capped and centered, so it — and the queued strip and compose card
+   below it — all share one left edge regardless of how wide the pane itself is. */
+.transcript-inner {
+  max-width: 760px;
+  margin-inline: auto;
+  padding: 8px 28px 28px;
+  font-size: 14.5px;
+  line-height: 1.75;
+  color: var(--color-neutral-200);
+}
+
+.transcript::-webkit-scrollbar {
+  width: 10px;
+}
+
+.transcript::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.transcript::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border: 2px solid var(--bg);
+  border-radius: 5px;
+}
+
+.transcript::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/*
+ * What is happening during the silence.
+ *
+ * Sits at the tail while the agent works and disappears when it stops, so its presence is
+ * itself the signal — a column that has genuinely finished has nothing here.
+ */
+.entry.doing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.doing-what {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entry {
+  margin-bottom: 10px;
+}
+
+/* The one place the accent gets a fill — kept small and bounded so it reads as a mark rather
+   than a flood, matching the rest of Nocturne's "accent as a line, not a wash" rule. */
+.entry-user-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 26px;
+}
+
+.user-bubble {
+  max-width: 82%;
+  background: var(--color-accent-900);
+  box-shadow: inset 0 0 0 1px var(--color-accent-800);
+  border-radius: 12px 12px 4px 12px;
+  padding: var(--space-4) 14px;
+}
+
+.user-bubble-label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-accent-400);
+}
+
+.user-bubble-text {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.6;
+  font-weight: 400;
+  color: var(--color-neutral-100);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* A note that went with the message: where it is, the line it was about, and what was said. */
+.user-note {
+  margin-top: var(--space-3);
+  padding-left: 10px;
+  border-left: 2px solid var(--color-accent-700);
+}
+
+.user-bubble-text + .user-note {
+  margin-top: var(--space-4);
+}
+
+.user-note-where {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--color-accent-300);
+}
+
+.user-note-quote {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--color-neutral-400);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.user-note-body {
+  margin: 4px 0 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--color-neutral-100);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Flat prose at the full measure: no bubble, no rail, no gutter. The agent is most of the
+   column, so it gets the page and everything else is marked against it. */
+.entry-agent {
+  margin-bottom: var(--space-8);
+}
+
+.entry-agent-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.entry-agent-who {
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-neutral-500);
+}
+
+.entry-agent-at {
+  font-size: 11px;
+  color: var(--color-neutral-700);
+}
+
+.markdown-body p {
+  margin: 0 0 14px;
+}
+
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0 0 14px;
+  padding-left: 20px;
+}
+
+.markdown-body li + li {
+  margin-top: 6px;
+}
+
+/* Hierarchy inside one agent message is not worth six sizes: every heading level renders as
+   the same one step, a section label rather than a title. */
+.markdown-body :is(h1, h2, h3, h4, h5, h6) {
+  margin: 0 0 8px;
+  font-family: var(--font-heading);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-neutral-500);
+}
+
+.markdown-body code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+}
+
+.markdown-body pre {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+.markdown-body pre code {
+  font-size: 12.5px;
+  line-height: 1.7;
+  background: none;
+  border: 0;
+  padding: 0;
+  white-space: pre;
+}
+
+/* Reasoning, marked apart from what the agent actually said. Folds to one line once
+   something follows it — watching it think is worth something live and nothing on the way
+   back up. */
+.thought-fold-btn {
+  display: block;
+  margin: 20px 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--color-neutral-600);
+  cursor: pointer;
+  text-align: left;
+}
+
+.thought-fold-btn:hover {
+  color: var(--color-neutral-500);
+}
+
+.thought-expanded {
+  margin: 20px 0;
+  padding-left: 16px;
+  border-left: 2px solid var(--color-divider);
+}
+
+.thought-expanded-toggle {
+  display: block;
+  margin: 0 0 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 11px;
+  color: var(--color-neutral-600);
+  cursor: pointer;
+}
+
+.thought-expanded-toggle:hover {
+  color: var(--color-neutral-500);
+}
+
+.thought-expanded-text {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.7;
+  font-style: italic;
+  color: var(--color-neutral-500);
+  white-space: pre-wrap;
+}
+
+/* A notice is the app talking about the conversation, so it reads as a band rather than as
+   another line of prose. The tone word comes from `tone`, never from parsing `text`. */
+.entry-notice {
+  margin: 0 0 var(--space-8);
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: inset 3px 0 0 var(--color-divider);
+}
+
+.entry-notice-tone {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-neutral-500);
+}
+
+.entry-notice-text {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-neutral-400);
+  white-space: pre-wrap;
+}
+
+/* A tool call outside any run reads as one line naming what it is — there's exactly one line
+   to show either way, so there's nothing gained by hiding it behind a fold. */
+.tool-activity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: var(--space-8);
+  color: var(--color-neutral-600);
+  font-size: 12px;
+}
+
+.tool-activity-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-activity.running {
+  color: var(--accent);
+}
+
+/* A run of tool calls, folded the same way `.thought-fold-btn` is: one quiet line once
+   something follows it, open while it's the live thing happening. */
+.tool-fold-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 var(--space-8);
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  color: var(--color-neutral-600);
+  cursor: pointer;
+  text-align: left;
+}
+
+.tool-fold-btn:hover {
+  color: var(--color-neutral-500);
+}
+
+.tool-fold-btn.running {
+  color: var(--accent);
+}
+
+.tool-expanded {
+  margin: 0 0 var(--space-8);
+  padding-left: 16px;
+  border-left: 2px solid var(--color-divider);
+}
+
+.tool-expanded-toggle {
+  display: block;
+  margin: 0 0 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 11px;
+  color: var(--color-neutral-600);
+  cursor: pointer;
+}
+
+.tool-expanded-toggle:hover {
+  color: var(--color-neutral-500);
+}
+
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--color-neutral-500);
+}
+
+.tool-row-mark {
+  flex: none;
+  color: var(--add);
+}
+
+.tool-row.failed .tool-row-mark {
+  color: var(--remove);
+}
+
+.tool-row-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A subagent launch, live for as long as it runs — a small card rather than a bare line since
+   it can carry a detail row and, once terminal, a summary paragraph. Coloured the same way
+   `.entry-notice` is: accent while running, remove on a failed/stopped outcome, quiet once it
+   simply completes. */
+/* Bordered, where a tool row is flat: a subagent is someone else working, so its card has
+   to close around its own content rather than sit in the column like one more tool call. */
+.subagent-activity {
+  margin: 0 0 var(--space-8);
+  padding: 10px 12px;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: inset 3px 0 0 var(--color-divider);
+  font-size: 12px;
+}
+
+.subagent-activity.running {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.subagent-activity.failed {
+  border-color: color-mix(in srgb, var(--remove) 40%, transparent);
+  box-shadow: inset 3px 0 0 var(--remove);
+}
+
+/* The same kicker as `.entry-agent-who`: this is a speaker announcing itself, not a tag on a
+   row, so it reads in the vocabulary the agent's own prose already uses. */
+.subagent-activity-who {
+  margin-bottom: 5px;
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-neutral-500);
+}
+
+.subagent-activity.running .subagent-activity-who {
+  color: var(--accent);
+}
+
+.subagent-activity.failed .subagent-activity-who {
+  color: var(--remove);
+}
+
+.subagent-activity-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-neutral-300);
+}
+
+.subagent-activity-mark {
+  flex: none;
+  color: var(--add);
+}
+
+.subagent-activity.failed .subagent-activity-mark {
+  color: var(--remove);
+}
+
+.subagent-activity-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.subagent-activity-detail {
+  margin-top: 4px;
+  color: var(--color-neutral-500);
+}
+
+.subagent-activity-summary {
+  margin: 4px 0 0;
+  color: var(--color-neutral-400);
+}
+
+/* A spinner sitting in a flex row rather than standing alone: it must not stretch or be
+   squeezed by whatever it sits beside. One class rather than a descendant rule per place,
+   so the reduced-motion override below still outranks all of them. */
+.spinner-inline {
+  flex: none;
+  align-self: center;
+}
+
+form {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+}
+
+textarea {
+  flex: 1;
+  min-height: 56px;
+  resize: vertical;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px;
+  font: inherit;
+}
+
+button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.placeholder {
+  color: var(--muted);
+  padding: 24px;
+}
+
+.placeholder h2 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.placeholder p {
+  margin: 0;
+}
+
+.diff-note {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-style: italic;
+  margin: 0;
+}
+
+textarea {
+  width: 100%;
+  margin-top: 0.35rem;
+  min-height: 2.6rem;
+  resize: vertical;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 1rem;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--panel);
+  color: var(--text);
+  white-space: nowrap;
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.challenge-kicker {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-neutral-600);
+}
+
+.spinner {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+    border-top-color: var(--line);
+  }
+}
+
+/* ── Board sections and file rows ── */
+
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-3) var(--space-6) var(--space-2);
+  background: none;
+  border: 0;
+  color: var(--color-neutral-500);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.group-head:hover {
+  color: var(--color-text);
+}
+
+.group-label {
+  flex: 1;
+}
+
+.group-head .count {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.caret {
+  width: 8px;
+}
+
+/* The composer, inline under whatever is picked. */
+.composer {
+  margin: 0;
+  padding: var(--space-4);
+  background: var(--color-surface);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+.composer-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: var(--space-2);
+}
+
+.composer-kicker {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-accent-300);
+}
+
+.composer-target {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--color-accent-300);
+}
+
+.composer textarea {
+  width: 100%;
+  min-height: 62px;
+  resize: vertical;
+  font-family: var(--font-body);
+  line-height: 1.55;
+  font-size: 13.5px;
+  color: var(--color-text);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  caret-color: var(--color-accent);
+}
+
+.composer textarea:focus-visible {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+/* Both verbs wait for something to be typed, but they are the choice on offer and have to read
+   as such before then — at the shared disabled opacity they looked absent. */
+.composer-foot .btn:disabled {
+  opacity: 0.75;
+}
+
+.composer-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: var(--space-2);
+}
+
+.composer-hint {
+  font-size: 11.5px;
+  color: var(--color-neutral-600);
+  margin-right: auto;
+}
+
+.note-remove {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  text-decoration: underline dotted;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+/* Notes with no change left to sit under. Given a home so they are not invisible. */
+.group.stale-notes > .group-head {
+  border-left: 2px solid var(--remove);
+}
+
+.stale-note {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+
+.stale-where {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stale-open {
+  all: unset;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stale-open:focus-visible {
+  outline: 1px solid var(--accent);
+}
+
+.stale-open:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.stale-where .note-state.pending {
+  color: var(--accent);
+}
+
+.stale-body {
+  color: var(--text);
+  margin: 3px 0;
+  white-space: pre-wrap;
+}
+
+/* The line it was written against — the only thing left that says what it was about. */
+.stale-line {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 3px 6px;
+  background: var(--panel);
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stale-note .note-remove {
+  margin-top: 4px;
+}
+
+/* ── Answering one change — asked once, below every region's own card ── */
+
+.decide {
+  margin-top: var(--space-6);
+}
+
+/* Idle: both moves side by side, plus whatever notes are riding along unsent. */
+.decide-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.decide-row .btn {
+  height: 38px;
+}
+
+.decide-row .reject {
+  border-color: var(--remove);
+  color: var(--remove);
+}
+
+/* ── The generic permission overlay: the agent is stopped, and this is the only way through ── */
+
+.permission-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+  background: color-mix(in srgb, var(--color-bg) 75%, transparent);
+}
+
+.permission-card {
+  /* Wider than the 440px this was while every prompt read "Allow Bash?": a real command needs
+     room to be read before it is approved. */
+  width: min(560px, 100%);
+  padding: var(--space-6);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.permission-title {
+  margin: 0 0 var(--space-4);
+  font-size: 17px;
+}
+
+/* The command verbatim. Wraps rather than scrolls horizontally — a long command that runs off
+   the edge is the same "approve what you cannot see" problem in a smaller box — and caps its
+   height so a pathological one-liner can't push the buttons off screen. */
+.permission-subject {
+  margin: 0 0 var(--space-4);
+  max-height: 180px;
+  overflow-y: auto;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.permission-description {
+  margin: 0 0 var(--space-2);
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.permission-reason {
+  margin: 0 0 var(--space-6);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.permission-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.permission-options .btn {
+  width: 100%;
+  height: 40px;
+  justify-content: space-between;
+  padding-inline: var(--space-4);
+}
+
+.permission-option-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.permission-reject {
+  border-color: var(--remove);
+  color: var(--remove);
+}
+
+.permission-standing {
+  border-color: var(--remove);
+}
+
+.permission-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid currentcolor;
+}
+
+.permission-queue-note {
+  margin: var(--space-4) 0 0;
+}
+
+/* ── The AskUserQuestion overlay: one or more multiple-choice questions, answered together ── */
+
+.question-card {
+  width: min(560px, 100%);
+  max-height: min(80vh, 720px);
+  overflow-y: auto;
+}
+
+.question-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.question-block + .question-block {
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-divider);
+}
+
+.question-header {
+  margin: 0 0 var(--space-1);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-neutral-600);
+}
+
+.question-title {
+  margin: 0 0 var(--space-3);
+}
+
+.question-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* An option is a paragraph, not a control label: it holds a whole sentence of description, so
+   it has to wrap. The global `button { white-space: nowrap }` above is inherited by both spans
+   otherwise, and an option's text runs off the card's right edge — unreadable, and the thing
+   being chosen is exactly what the reader can't see. */
+.question-options .question-option {
+  width: 100%;
+  height: auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: var(--space-2) var(--space-4);
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.question-option-label {
+  font-size: 14px;
+}
+
+.question-option-description {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-neutral-600);
+}
+
+.question-option-other {
+  cursor: text;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
+}
+
+.question-option-other.active {
+  border-color: var(--color-accent);
+}
+
+.question-option-other .question-option-label {
+  display: block;
+  margin-bottom: var(--space-1);
+  color: var(--color-neutral-600);
+}
+
+.question-option-other .input {
+  min-height: 32px;
+}
+
+.question-actions {
+  margin-top: var(--space-6);
+}
+
+.question-actions .btn {
+  width: 100%;
+  height: 40px;
+}
+
+/* An answer already given, and the way back out of it. */
+
+/* ── Sending a plan back ──────────────────────────────────────────────────────────────────
+ *
+ * These classes were written for the pre-pivot chunk gate, deleted with it, and left referenced
+ * by the plan modal for the whole time that modal existed — so the send-back box rendered with
+ * no styling at all. Written fresh here against the current tokens rather than recovered.
+ *
+ * Modelled on `.composer`: it is the same act on a bigger object — saying what is wrong with
+ * something the agent wrote, in a box that opened under it. */
+
+.reject-box {
+  margin: 0;
+  padding: var(--space-4) var(--space-6);
+  background: var(--color-surface);
+  box-shadow: inset 3px 0 0 var(--remove);
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.reject-box-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: var(--space-2);
+}
+
+.reject-box-kicker {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--remove);
+}
+
+.reject-box-target {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--color-neutral-600);
+}
+
+.reject-box-cancel {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--color-neutral-600);
+  cursor: pointer;
+}
+
+.reject-box-cancel:hover {
+  color: var(--color-text);
+}
+
+.reject-box-field {
+  width: 100%;
+  min-height: 62px;
+  resize: vertical;
+  font-family: var(--font-body);
+  line-height: 1.55;
+  font-size: 13.5px;
+}
+
+.reject-box-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: var(--space-2);
+}
+
+.reject-box-hint {
+  margin-right: auto;
+  font-size: 11.5px;
+  color: var(--color-neutral-600);
+}
+
+/* A decided plan, kept in the conversation. Folded by default — see `PlanRecord`. */
+.plan-record {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-3);
+  box-shadow: inset 2px 0 0 var(--color-neutral-600);
+}
+
+.plan-record-approved {
+  box-shadow: inset 2px 0 0 var(--color-accent-400);
+}
+
+.plan-record-body {
+  margin-top: var(--space-2);
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 12.5px;
+}
+
+/* An excerpt of a document, not a chat message: the conversation flattens every heading to one
+   uppercase section label, which reads as shouting when the thing being quoted has a title. */
+.plan-record-body :is(h1, h2, h3, h4, h5, h6) {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12.5px;
+  color: var(--color-text);
+}
+
+.plan-record-body h1 {
+  font-size: 14px;
+  color: var(--color-accent-2);
+}
+
+/* ── The plan, as a document ──────────────────────────────────────────────────────────────
+ *
+ * Read as markdown, not as its own source. Every block carries a margin beside it you can drag,
+ * and the prose itself can be highlighted — the two instincts for objecting to part of a
+ * document, neither of which is wrong. */
+
+.plan-doc {
+  /* Full width of the pane, and left-aligned with its header. Not capped for line length: the
+     pane is as wide as the reader made it, and a plan is full of tables and code blocks that a
+     760px column cuts in half — the one on screen was clipping its own directory tree. */
+  /* The tail is room to work in, not dead space: it lets the last block scroll up clear of the
+     bottom edge, with somewhere for its note composer to open. */
+  padding: var(--space-6) 24px 25vh var(--space-4);
+}
+
+/* The gap on the left is the margin's, and it is always there — a handle that appears on hover
+   is one nobody discovers. */
+.plan-block-row {
+  position: relative;
+  padding-left: 28px;
+}
+
+.plan-margin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.plan-margin::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--color-divider);
+}
+
+.plan-margin:hover::after,
+.plan-margin:focus-visible::after {
+  background: var(--color-accent-400);
+}
+
+.plan-margin:focus-visible {
+  outline: none;
+}
+
+.plan-block {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  /* The reader is meant to select this. Nothing else in a document pane is. */
+  user-select: text;
+}
+
+/* The words a note is actually about, still visible once the note box has taken the cursor.
+   The browser paints a selection only in the focused element, so this paints it instead — see
+   `usePaintedSelection`. Deliberately stronger than the block tint under it: this is the exact
+   text, and the tint is only the neighbourhood. */
+::highlight(plan-annotating) {
+  background: rgb(var(--accent-rgb) / 42%);
+  color: var(--color-accent-2);
+}
+
+/* Under a note, and under the drag or the open note box that is about to become one — the same
+   tint the document surface puts on lines that have been asked about. */
+.plan-block.noted,
+.plan-block.dragging {
+  background: rgb(var(--accent-rgb) / 14%);
+  box-shadow: inset 2px 0 0 var(--color-accent-400);
+}
+
+.plan-block-notes {
+  margin: var(--space-2) 0 var(--space-4);
+}
+
+/* A plan is structure, and the reader navigates by it, so the heading levels keep their
+   hierarchy here rather than flattening to the one section label a chat bubble wants. */
+.plan-doc .markdown-body :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--font-heading);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-text);
+}
+
+.plan-doc .markdown-body h1 {
+  margin: 0 0 4px;
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.plan-doc .markdown-body h2 {
+  margin: var(--space-4) 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.plan-doc .markdown-body :is(h3, h4, h5, h6) {
+  margin: var(--space-3) 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-neutral-500);
+}
+
+.plan-doc .markdown-body :is(p, ul, ol) {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--color-neutral-400);
+}
+
+.plan-doc .markdown-body :is(p, ul, ol, pre):last-child {
+  margin-bottom: 0;
+}
+
+/* A plan states its decisions in a table more often than not, and nothing here styled one. */
+.plan-doc .markdown-body table {
+  margin: 0 0 14px;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.plan-doc .markdown-body :is(th, td) {
+  padding: 6px 14px 6px 0;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.plan-doc .markdown-body th {
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.plan-doc .markdown-body td {
+  color: var(--color-neutral-400);
+}
+
+.tree-dir .caret {
+  display: inline-block;
+  width: 12px;
+  color: var(--color-neutral-600);
+}
+
+.context-file-body {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--color-neutral-400);
+}
+
+/* A project Turnstile cannot track yet (see `UntrackedPanel.tsx`). */
+.untracked {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.untracked-card {
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.untracked-error {
+  color: var(--remove);
+}
+
+/* ---------------------------------------------------------------------------
+ * The sidecar layout: a slim header, the changed files as tabs, then three columns — the
+ * project tree (hideable), the open file, and the conversation (hideable). Transcribed from
+ * the "Turnstile Sidecar" Claude Design handoff.
+ * ------------------------------------------------------------------------- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--color-bg);
+}
+
+/* Eyebrow label, used for every panel's title. */
+.lbl {
+  font: 500 9.5px / 1 var(--font-heading);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-neutral-600);
+  white-space: nowrap;
+}
+
+/* ── Header ── */
+
+.top-bar {
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  height: 48px;
+  padding: 0 18px;
+  box-shadow: inset 0 -1px 0 rgb(var(--text-rgb) / 10%);
+  font: 12px / 1 var(--mono);
+  color: var(--color-neutral-500);
+  min-width: 0;
+}
+
+.top-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.top-bar-center {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+/* One line — verb, then target — for what the agent is doing. Informational only. */
+.activity-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 460px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 11px 0 10px;
+  border-radius: 999px;
+  background: rgb(var(--accent-rgb) / 10%);
+  box-shadow: inset 0 0 0 1px rgb(var(--accent-rgb) / 30%);
+  animation: activity-fade 0.18s ease-out;
+}
+
+.activity-bar.activity-you {
+  background: rgb(var(--accent-rgb) / 18%);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.activity-bar.activity-starting {
+  background: rgb(var(--text-rgb) / 5%);
+  box-shadow: inset 0 0 0 1px rgb(var(--text-rgb) / 12%);
+}
+
+.activity-bar.activity-idle {
+  background: transparent;
+  box-shadow: none;
+}
+
+.activity-mark {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 9px;
+  height: 9px;
+}
+
+.activity-starting .spinner {
+  border-top-color: var(--color-neutral-600);
+}
+
+.activity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-neutral-700);
+}
+
+.activity-you .activity-dot {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.activity-verb {
+  flex: none;
+  font: 500 11.5px / 1 var(--font-heading);
+  letter-spacing: 0.02em;
+  color: var(--color-accent-300);
+  white-space: nowrap;
+}
+
+.activity-starting .activity-verb {
+  color: var(--color-neutral-400);
+}
+
+.activity-idle .activity-verb {
+  color: var(--color-neutral-600);
+}
+
+.activity-target {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11.5px / 1 var(--mono);
+  color: var(--color-neutral-400);
+}
+
+@keyframes activity-fade {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-bar {
+    animation: none;
+  }
+}
+
+.top-bar-brand {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-accent);
+}
+
+/* The glow is the theme's one ornament, and it is spent in four places only: the wordmark,
+   the primary action, the open file's name, and the severity bar on a finding. Phosphor bloom
+   reads as "lit" when it is rare and as a blur filter when it is everywhere. */
+.brand {
+  font: 700 13px / 1 var(--font-heading);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-accent-2);
+  text-shadow: 0 0 12px rgb(var(--accent-rgb) / 45%);
+}
+
+/* `TurnstileMark` draws on `currentColor`, which `.top-bar-brand` already sets — so the mark
+   only needs the bloom, and picks up the hue on its own. */
+.top-bar-brand svg {
+  filter: drop-shadow(0 0 6px rgb(var(--accent-rgb) / 55%));
+}
+
+.top-bar-divider {
+  flex: none;
+  width: 1px;
+  height: 20px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgb(var(--text-rgb) / 16%) 30%,
+    rgb(var(--text-rgb) / 16%) 70%,
+    transparent
+  );
+}
+
+.top-bar-where {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-bar-dot {
+  color: var(--color-neutral-700);
+}
+
+.top-bar-delta {
+  flex: none;
+  white-space: nowrap;
+}
+
+.top-bar-delta .added {
+  color: var(--add);
+}
+
+.top-bar-delta .removed {
+  color: var(--remove);
+}
+
+.top-bar-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  min-width: 0;
+}
+
+.top-bar-agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.top-bar-meter {
+  position: relative;
+  display: block;
+  width: 52px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgb(var(--text-rgb) / 12%);
+  overflow: hidden;
+}
+
+.top-bar-meter > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--color-neutral-600);
+}
+
+.session-switcher-trigger {
+  height: 28px;
+  font-size: 13px;
+}
+
+/* ── The files the reader opened, as tabs ── */
+
+.file-tabs {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  box-shadow: inset 0 -1px 0 rgb(var(--text-rgb) / 10%);
+}
+
+.file-tabs-scroll {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  height: 40px;
+  box-shadow: inset -1px 0 0 rgb(var(--text-rgb) / 8%);
+  color: var(--color-neutral-500);
+}
+
+.tab:hover {
+  background: rgb(var(--text-rgb) / 6%);
+}
+
+.tab.on {
+  background: var(--color-surface);
+  color: var(--color-accent-2);
+  box-shadow:
+    inset 0 -2px 0 var(--tab-edge, var(--color-accent)),
+    inset -1px 0 0 rgb(var(--text-rgb) / 8%);
+}
+
+.tab-open {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 4px 0 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font: 13px / 1 var(--mono);
+  font-weight: 400;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* Close: out of the way until the tab is pointed at or open. */
+.tab-close {
+  align-self: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--color-neutral-500);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.tab:hover .tab-close,
+.tab.on .tab-close,
+.tab-close:focus-visible {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: rgb(var(--text-rgb) / 10%);
+  color: var(--color-text);
+}
+
+.tab-notes {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgb(var(--accent-rgb) / 22%);
+  font: 11px / 1.5 var(--mono);
+  color: var(--color-text);
+}
+
+.tab-notes-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-accent-400);
+}
+
+/* ── The files the reader opened themselves: a quiet strip across the top, labelled ── */
+
+.open-tabs {
+  background: rgb(0 0 0 / 14%);
+}
+
+.open-tabs .tab {
+  height: 34px;
+}
+
+.open-tabs .tab-open {
+  padding-left: 12px;
+  font-size: 12.5px;
+}
+
+/* The strip says where the reader is, not what the review made of anything — so the open tab's
+   edge stays neutral and the dot beside the name carries the colour. */
+.open-tabs .tab.on {
+  --tab-edge: var(--color-neutral-600);
+}
+
+/* Risk badge, on each change's card. */
+.sev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 38px;
+  height: 17px;
+  padding: 0 6px;
+  border-radius: 3px;
+  font: 600 9.5px / 1 var(--font-heading);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Under Nocturne these badges carried no colour at all — the greyscale ramp behind the rail
+   did the grading, and a coloured pill would have been the only hue on a mono-accent screen.
+   Terminal inverts that: green is the chrome, so severity has to leave the scheme to register
+   at all. The border keeps its own weight (`box-sizing: border-box` above means it costs no
+   height), because a filled pill at 9.5px reads as a button. */
+.sev-high {
+  color: var(--high);
+  border: 1px solid rgb(var(--high-rgb) / 45%);
+  background: rgb(var(--high-rgb) / 12%);
+}
+
+.sev-med {
+  color: var(--med);
+  border: 1px solid rgb(var(--med-rgb) / 45%);
+  background: rgb(var(--med-rgb) / 12%);
+}
+
+.sev-low {
+  color: var(--color-accent);
+  border: 1px solid rgb(var(--accent-rgb) / 38%);
+  background: rgb(var(--accent-rgb) / 10%);
+}
+
+.sev-none {
+  color: var(--color-neutral-500);
+  border: 1px solid rgb(var(--text-rgb) / 16%);
+  background: rgb(var(--text-rgb) / 5%);
+}
+
+/* ── The review rail: the changed files, in sections by what the review made of them ── */
+
+.review-rail {
+  width: 276px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--color-rail);
+  box-shadow: inset -1px 0 0 rgb(var(--text-rgb) / 10%);
+}
+
+.review-rail .lbl {
+  color: var(--color-neutral-600);
+}
+
+.review-rail-count {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px / 1 var(--mono);
+  color: var(--color-neutral-700);
+}
+
+.review-rail-keys {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.review-rail-plan-slot {
+  flex: none;
+  display: flex;
+  padding: 2px 10px 8px;
+}
+
+.review-rail-plan {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: rgb(var(--accent-rgb) / 12%);
+  box-shadow: inset 2px 0 0 var(--color-accent-400);
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-rail-plan:hover {
+  background: rgb(var(--accent-rgb) / 20%);
+}
+
+.review-rail-plan.on {
+  background: rgb(var(--accent-rgb) / 24%);
+  box-shadow:
+    inset 2px 0 0 var(--color-accent-400),
+    inset 0 0 0 1px rgb(var(--accent-rgb) / 35%);
+}
+
+.review-rail-plan-mark {
+  font-size: 11px;
+  color: var(--color-accent-400);
+}
+
+.review-rail-plan-name {
+  flex: none;
+  white-space: nowrap;
+  font: 13px / 1 var(--mono);
+  color: var(--color-accent-300);
+}
+
+.review-rail-plan-aside {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px / 1 var(--font-body);
+  color: var(--color-neutral-500);
+}
+
+.review-rail-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
+.review-rail-empty {
+  margin: 0;
+  padding: 10px 12px;
+  font: 12px / 1.5 var(--font-body);
+  color: var(--color-neutral-500);
+}
+
+.review-rail-group-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px 5px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.review-rail-group + .review-rail-group .review-rail-group-head {
+  padding-top: 12px;
+}
+
+.review-rail-group-label {
+  font: 600 9.5px / 1 var(--font-heading);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--color-neutral-500);
+}
+
+.group-high .review-rail-group-label {
+  color: var(--high);
+}
+
+.group-medium .review-rail-group-label {
+  color: var(--med);
+}
+
+.group-unreviewed .review-rail-group-label {
+  color: var(--color-neutral-400);
+}
+
+.group-none .review-rail-group-label,
+.group-reviewed .review-rail-group-label {
+  color: var(--color-neutral-600);
+}
+
+.review-rail-group-count {
+  font: 11px / 1 var(--mono);
+  color: var(--color-neutral-700);
+}
+
+.review-rail-group-rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, rgb(var(--text-rgb) / 14%), transparent);
+}
+
+.review-rail-group-caret {
+  font: 11px / 1 var(--font-body);
+  color: var(--color-neutral-600);
+}
+
+.review-rail-group-head:hover .review-rail-group-caret {
+  color: var(--color-text);
+}
+
+.rail-row {
+  display: flex;
+  align-items: center;
+}
+
+.rail-row:hover {
+  background: rgb(var(--text-rgb) / 6%);
+}
+
+.rail-row.on {
+  background: var(--color-surface);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.rail-row-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 4px 7px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rail-row-name,
+.rail-row-dir {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-row-name {
+  font: 12.5px / 1.3 var(--mono);
+  color: var(--color-neutral-300);
+}
+
+.rail-row-dir {
+  font: 11px / 1.3 var(--mono);
+  color: var(--color-neutral-500);
+}
+
+.rail-row.on .rail-row-name {
+  color: var(--color-accent-2);
+}
+
+.rail-row.on .rail-row-dir {
+  color: var(--color-neutral-400);
+}
+
+.rail-row-open .tab-notes {
+  flex: none;
+  gap: 4px;
+  padding: 1px 6px;
+  font-size: 10.5px;
+}
+
+.rail-row-delta {
+  flex: none;
+  font: 10.5px / 1 var(--mono);
+  color: var(--color-neutral-600);
+}
+
+/* Mark reviewed: out of the way until the row is pointed at or open. */
+.rail-row-hide {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--color-neutral-500);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.rail-row:hover .rail-row-hide,
+.rail-row.on .rail-row-hide,
+.rail-row-hide:focus-visible {
+  opacity: 1;
+}
+
+.rail-row-hide:hover {
+  background: rgb(var(--text-rgb) / 10%);
+  color: var(--color-text);
+}
+
+.review-rail-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+  padding: 9px 12px 12px;
+  box-shadow: inset 0 1px 0 rgb(var(--text-rgb) / 8%);
+}
+
+.review-rail-hint {
+  margin-left: auto;
+  font: 11px / 1.45 var(--font-body);
+  color: var(--color-neutral-700);
+  white-space: nowrap;
+}
+
+/* "Changed" or "All files": which of the two views fills the panel. */
+.rail-switch {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  margin: 0 12px 10px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgb(var(--text-rgb) / 6%);
+}
+
+.rail-switch-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: 500 12px / 1 var(--font-body);
+  color: var(--color-neutral-500);
+  cursor: pointer;
+}
+
+.rail-switch-tab:hover {
+  color: var(--color-text);
+}
+
+.rail-switch-tab[aria-selected="true"] {
+  background: var(--color-surface);
+  box-shadow: 0 0 0 1px rgb(var(--accent-rgb) / 35%);
+  color: var(--color-text);
+}
+
+.rail-switch-count {
+  font: 11px / 1 var(--mono);
+  color: var(--color-neutral-600);
+}
+
+.rail-switch-tab[aria-selected="true"] .rail-switch-count {
+  color: var(--color-accent-400);
+}
+
+.rail-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.rail-view[hidden] {
+  display: none;
+}
+
+.rail-legend {
+  gap: 11px;
+  font: 11px / 1.45 var(--font-body);
+  color: var(--color-neutral-500);
+}
+
+.rail-legend > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.rail-legend-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+}
+
+/* ── The workspace: the left panel, then the file over the conversation ── */
+
+.workspace-left {
+  display: flex;
+  min-height: 0;
+}
+
+.workspace {
+  flex: 1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.workspace-center {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.main-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.panel-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px 8px;
+}
+
+.convo-panel .panel-head {
+  padding: 13px 16px 9px;
+}
+
+.review-rail .panel-head {
+  gap: 8px;
+}
+
+.panel-hide {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid rgb(var(--text-rgb) / 22%);
+  border-radius: 6px;
+  background: rgb(var(--text-rgb) / 8%);
+  color: var(--color-neutral-100);
+  cursor: pointer;
+}
+
+.panel-hide:hover {
+  border-color: rgb(var(--text-rgb) / 36%);
+  background: rgb(var(--text-rgb) / 16%);
+}
+
+.review-rail-keys + .panel-hide {
+  margin-left: 0;
+}
+
+/* The left panel, folded to a rail that still says what it holds. */
+.side-rail {
+  width: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--color-rail);
+  box-shadow: inset -1px 0 0 rgb(var(--text-rgb) / 10%);
+  color: var(--color-neutral-500);
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.side-rail:hover {
+  background: var(--color-surface);
+}
+
+.side-rail-label {
+  writing-mode: vertical-rl;
+  font: 500 10px / 1 var(--font-heading);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.side-rail-meta {
+  writing-mode: vertical-rl;
+  font: 11px / 1 var(--mono);
+}
+
+.workspace-left-panel {
+  display: flex;
+  min-height: 0;
+}
+
+.workspace-left-panel[hidden] {
+  display: none;
+}
+
+/* ── The project tree: the left panel's "All files" view ── */
+
+.files-panel-search {
+  flex: none;
+  position: relative;
+  padding: 0 12px 10px;
+}
+
+.files-panel-search .input {
+  min-height: 32px;
+  padding-right: 42px;
+  font-size: 13px;
+}
+
+.files-panel-search kbd {
+  position: absolute;
+  right: 20px;
+  top: 9px;
+}
+
+.files-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 10px;
+}
+
+.tree {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font: 12.5px / 1 var(--mono);
+  font-weight: 400;
+  color: var(--color-neutral-500);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tree:hover {
+  background: rgb(var(--text-rgb) / 6%);
+}
+
+.tree.changed {
+  color: var(--color-neutral-300);
+}
+
+.tree.on {
+  background: var(--color-surface);
+  color: var(--color-accent-2);
+}
+
+.tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-caret {
+  flex: none;
+  color: var(--color-neutral-700);
+}
+
+/* Files line up with the folder names beside them, past where a caret would sit. */
+.tree-file .tree-name {
+  padding-left: 14px;
+}
+
+.tree-dot {
+  flex: none;
+  margin-left: auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--color-neutral-700);
+}
+
+/* Tinted by the section the file sits in on the "Changed" side. */
+.tree-dot-high {
+  background: var(--high);
+}
+
+.tree-dot-medium {
+  background: var(--med);
+}
+
+.tree-dot-unreviewed {
+  background: var(--color-neutral-400);
+}
+
+.tree-dot-low,
+.tree-dot-skipped {
+  background: var(--color-neutral-500);
+}
+
+.tree-dot-none {
+  background: var(--color-neutral-600);
+}
+
+/* Done with, whatever its risk was: the reader marked it reviewed. */
+.tree-dot-reviewed {
+  background: var(--add);
+}
+
+/* A tab carries the same dot, tinted by the same rules above — one colour per file wherever it
+   is drawn. `margin-left: auto` is the tree's business (it pushes the dot out to the row's far
+   edge); on a tab it belongs beside the name, on the gap `.tab-open` already sets. */
+.open-tabs .tree-dot {
+  margin-left: 0;
+}
+
+/* ── The open file ── */
+
+.file-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.file-pane-head {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 15px 24px 9px;
+}
+
+/* Wraps above the actions rather than being squeezed by them; the directory gives way first,
+   and the file's own name never does. */
+.file-pane-title {
+  flex: 1 1 auto;
+  min-width: 200px;
+  overflow: hidden;
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.file-pane-head h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: baseline;
+  white-space: nowrap;
+  font: 500 17px / 1.2 var(--mono);
+  color: var(--color-accent-2);
+  text-shadow: 0 0 14px rgb(var(--accent-rgb) / 22%);
+}
+
+.file-pane-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text);
+}
+
+.file-pane-name {
+  flex: none;
+}
+
+.file-pane-facts {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 11.5px / 1 var(--mono);
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}
+
+.file-pane-actions {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.file-pane-notes {
+  font: 11.5px / 1 var(--font-body);
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}
+
+.file-pane-actions .btn {
+  height: 30px;
+  font-size: 13px;
+}
+
+.btn-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgb(var(--accent-rgb) / 28%);
+  font: 600 11px / 1 var(--mono);
+  color: var(--color-text);
+}
+
+/* Not a scroller any more — `.cm-scroller` is, and exactly one of them per pane. The left
+   inset stays here because it costs the scrollbar nothing; the right and bottom insets moved
+   onto `.cm-content`, so the scrollbar sits at the pane's edge rather than 24px inside it.
+   Flex because `PlainCode` returns a fragment: its `SaveBar` and editor are direct children. */
+.file-pane-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0 0 0 24px;
+}
+
+/* The plan scrolls itself, for the same reason `.file-pane-static` does: there is no editor
+   inside it to do the scrolling. It has to come after `.file-pane-body` rather than with the
+   rest of the plan's styles — both selectors are one class, so the later one wins, and
+   `overflow: hidden` up there was quietly cancelling this. */
+.plan-pane-body {
+  overflow-y: auto;
+}
+
+/* A pane body with no document in it — a binary file. Scrolls itself, since there is no
+   editor to do it, and carries the right inset the body gave up to the editor's content. */
+.file-pane-static {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 24px 20px 0;
+}
+
+.file-pane-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 24px 10px;
+  box-shadow: inset 0 1px 0 rgb(var(--text-rgb) / 8%);
+  font: 11px / 1.4 var(--font-body);
+  color: var(--color-neutral-500);
+}
+
+.file-pane-foot-end {
+  margin-left: auto;
+}
+
+.diff-note {
+  padding: 12px 0;
+}
+
+/* ── The document: one line per row, a single gutter ── */
+
+.diff {
+  font: 13px / 1.9 var(--mono);
+}
+
+.diff.selecting {
+  cursor: ns-resize;
+  user-select: none;
+}
+
+/* A change's card, where the change starts: where it is, and what the review found. */
+.grp {
+  display: flex;
+  margin: 14px 0 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-surface);
+  font-family: var(--font-body);
+}
+
+.grp-bar {
+  flex: none;
+  width: 4px;
+  background: rgb(var(--accent-rgb) / 45%);
+}
+
+/* The bar was one fixed accent for every band. It carries the severity now, which is what
+   makes a high finding legible while the card is still scrolling past. */
+.grp-high .grp-bar {
+  background: var(--high);
+  box-shadow: 0 0 14px rgb(var(--high-rgb) / 55%);
+}
+
+.grp-med .grp-bar {
+  background: var(--med);
+  box-shadow: 0 0 14px rgb(var(--med-rgb) / 45%);
+}
+
+.grp-low .grp-bar {
+  background: rgb(var(--accent-rgb) / 55%);
+}
+
+.grp-none .grp-bar {
+  background: rgb(var(--text-rgb) / 22%);
+}
+
+.grp-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 11px 14px 12px;
+}
+
+.grp-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.grp-where {
+  font: 500 15px / 1.2 var(--mono);
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.grp-meta {
+  margin-left: auto;
+  font: 11.5px / 1.2 var(--mono);
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}
+
+.grp-why {
+  margin: 0;
+  max-width: 88ch;
+  font: 14px / 1.55 var(--font-body);
+  color: var(--color-neutral-300);
+  text-wrap: pretty;
+  white-space: normal;
+}
+
+/* A note, set into the document under the line it is about. */
+.note {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 7px 0 9px 38px;
+  padding: 11px 14px 10px;
+  border-radius: 8px;
+  background: rgb(var(--accent-rgb) / 14%);
+  box-shadow:
+    inset 3px 0 0 var(--color-accent),
+    0 1px 0 rgb(0 0 0 / 30%);
+  font-family: var(--font-body);
+  white-space: normal;
+}
+
+.note.sent {
+  background: rgb(var(--text-rgb) / 5%);
+  box-shadow: inset 3px 0 0 var(--color-neutral-700);
+}
+
+.note-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  white-space: nowrap;
+}
+
+.note-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 600 10px / 1 var(--font-heading);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-accent-300);
+}
+
+.note-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--color-accent-400);
+}
+
+.note-where {
+  font: 11.5px / 1 var(--mono);
+  color: var(--color-neutral-300);
+}
+
+.note-state {
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgb(var(--accent-rgb) / 22%);
+  font: 10px / 1.5 var(--font-heading);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text);
+}
+
+.note.sent .note-who,
+.note.sent .note-where {
+  color: var(--color-neutral-500);
+}
+
+.note.sent .note-dot {
+  background: var(--color-neutral-600);
+}
+
+.note.sent .note-state {
+  background: rgb(var(--text-rgb) / 8%);
+  color: var(--color-neutral-500);
+}
+
+.note-body {
+  margin: 0;
+  max-width: 80ch;
+  font: 13.5px / 1.55 var(--font-body);
+  color: var(--color-text);
+  text-wrap: pretty;
+  white-space: pre-wrap;
+}
+
+.note.sent .note-body {
+  color: var(--color-neutral-300);
+}
+
+/* ── A question, and what came back ──
+   Built on the note's shape on purpose: it is the same gesture on the same lines, and the two
+   should read as one family. Neutral rather than accented, because unlike a note nothing here
+   is owed to anyone — it has already been answered and asks nothing of the agent. */
+.ask {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 7px 0 9px 38px;
+  padding: 11px 14px 10px;
+  border-radius: 8px;
+  background: rgb(var(--text-rgb) / 5%);
+  box-shadow:
+    inset 3px 0 0 var(--color-neutral-600),
+    0 1px 0 rgb(0 0 0 / 30%);
+  font-family: var(--font-body);
+  white-space: normal;
+}
+
+.ask .note-who {
+  color: var(--color-neutral-300);
+}
+
+.ask .note-dot {
+  background: var(--color-neutral-500);
+}
+
+.ask-close {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: 11.5px / 1 var(--font-body);
+  color: var(--color-neutral-500);
+}
+
+.ask-close:hover {
+  color: var(--color-text);
+}
+
+.ask-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ask-question {
+  margin: 0;
+  max-width: 80ch;
+  padding-left: 11px;
+  box-shadow: inset 2px 0 0 var(--color-neutral-700);
+  font: 13.5px / 1.55 var(--font-body);
+  color: var(--color-neutral-300);
+  text-wrap: pretty;
+  white-space: pre-wrap;
+}
+
+.ask-answer {
+  max-width: 80ch;
+  font-size: 13.5px;
+  color: var(--color-text);
+}
+
+/* The answer is the one part of this that is prose from a model, so it gets the same
+   treatment the conversation's prose does. */
+.ask-answer .markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.ask-answer .markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.ask-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font: 12.5px / 1.4 var(--font-body);
+  color: var(--color-neutral-400);
+}
+
+.ask-error {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  font: 12.5px / 1.45 var(--font-body);
+  color: var(--remove);
+}
+
+.ask-retry {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: 12.5px / 1.45 var(--font-body);
+  text-decoration: underline;
+  color: var(--color-neutral-400);
+}
+
+.ask-retry:hover {
+  color: var(--color-text);
+}
+
+.ask-reply {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.ask-reply textarea {
+  flex: 1;
+  min-height: 34px;
+  max-height: 160px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-neutral-700);
+  border-radius: 6px;
+  background: rgb(0 0 0 / 20%);
+  resize: vertical;
+  font: 13px / 1.5 var(--font-body);
+  color: var(--color-text);
+}
+
+.ask-reply textarea:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.note-actions .note-remove {
+  font-size: 11.5px;
+  text-decoration: none;
+  color: var(--color-neutral-500);
+}
+
+.note-actions .note-remove:hover {
+  color: var(--color-text);
+}
+
+.composer {
+  margin-left: 38px;
+  font-family: var(--font-body);
+  white-space: normal;
+}
+
+/* ── The conversation ── */
+
+.convo-panel {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 140px;
+  max-height: 85%;
+  background: var(--color-rail);
+  box-shadow: inset 0 1px 0 rgb(var(--text-rgb) / 10%);
+}
+
+/* The docked conversation's top edge, dragged to resize it. */
+.convo-resize {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  height: 6px;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.convo-resize:hover,
+.convo-resize:active {
+  background: linear-gradient(transparent 2px, var(--color-accent) 2px 4px, transparent 4px);
+}
+
+/* A hidden conversation, folded to a bar along the bottom that still says what it holds. */
+.bottom-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 30px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 0;
+  background: var(--color-rail);
+  box-shadow: inset 0 1px 0 rgb(var(--text-rgb) / 10%);
+  color: var(--color-neutral-500);
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.bottom-bar:hover {
+  background: var(--color-surface);
+}
+
+.bottom-bar-label {
+  font: 500 10px / 1 var(--font-heading);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.bottom-bar-meta {
+  font: 11px / 1 var(--mono);
+}
+
+.bottom-bar svg {
+  margin-left: auto;
+}
+
+.status-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-neutral-700);
+}
+
+.status-dot.live {
+  background: var(--color-accent);
+  box-shadow: 0 0 8px var(--color-accent);
+}
+
+.transcript {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 16px 6px;
+}
+
+.transcript-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: none;
+  margin: 0;
+  padding: 4px 0 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-neutral-300);
+}
+
+/* The column's gap is the only space between entries — the entries' own margins date from
+   the old full-width transcript and stacked on top of it. */
+.transcript-inner > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.entry-user-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.user-bubble {
+  max-width: 94%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgb(var(--accent-rgb) / 12%);
+  box-shadow: inset 0 0 0 1px rgb(var(--accent-rgb) / 35%);
+}
+
+.entry-agent {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-neutral-300);
+}
+
+.entry.doing {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font: 12px / 1.4 var(--mono);
+  color: var(--color-neutral-500);
+}
+
+.queued {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 16px 10px;
+}
+
+.queued-item {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgb(var(--accent-rgb) / 8%);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.queued-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.queued-head .lbl {
+  color: var(--color-accent-400);
+}
+
+.queued-head .note-remove {
+  margin-left: auto;
+  font-size: 11px;
+  text-decoration: none;
+  color: var(--color-neutral-500);
+}
+
+.queued-where {
+  font: 11px / 1.4 var(--mono);
+  color: var(--color-neutral-500);
+}
+
+.queued-text {
+  margin: 0;
+  font: 13px / 1.5 var(--font-body);
+  color: var(--color-text);
+  white-space: pre-wrap;
+}
+
+/* The global `form` rule predates this panel; the compose box sets its own layout. */
+.compose {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px 16px 15px;
+  border-top: 0;
+  box-shadow: inset 0 1px 0 rgb(var(--text-rgb) / 8%);
+}
+
+.compose-textarea {
+  flex: none;
+  min-height: 66px;
+  margin: 0;
+  resize: none;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.compose-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compose-row .btn {
+  height: 30px;
+  font-size: 13px;
+}
+
+.compose-kbd {
+  font: 11px / 1 var(--font-body);
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}
+
+.compose-stop {
+  margin-left: auto;
+}
+
+.compose-submit {
+  margin-left: auto;
+}
+
+.compose-stop + .compose-submit {
+  margin-left: 0;
+}
+
+.compose-notes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+  font: 11.5px / 1.4 var(--font-body);
+  color: var(--color-neutral-500);
+}
+
+.compose-notes .btn {
+  margin-left: auto;
+  height: 24px;
+  font-size: 12.5px;
+}
+
+/* Docked beside a file with nothing changed yet. */
+.main-empty {
+  margin: auto;
+  max-width: 44ch;
+  padding: 24px;
+  text-align: center;
+  color: var(--color-neutral-300);
+}
+
+.main-empty p {
+  margin: 0;
+}
+
+.main-empty .main-empty-sub {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--color-neutral-500);
+}
+
+/* ── A context file: opened from the tree for a look ── */
+
+.context-file-body {
+  font: 13px / 1.9 var(--mono);
+}
+
+/* Review findings — on a change's card, and above the file for those outside every change. */
+.findings {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  max-width: 88ch;
+}
+
+.finding {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+/* The rule's own name, which is the repository's vocabulary rather than the reviewer's prose —
+   so it is tinted as chrome (green) and not as severity. The severity badge beside it is the
+   thing that is allowed to be red. */
+.finding-rule {
+  font: 12px / 1.4 var(--mono);
+  color: var(--color-accent-2);
+  background: rgb(var(--accent-rgb) / 12%);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.finding-where {
+  font: 12px / 1.4 var(--mono);
+  color: var(--color-neutral-400);
+}
+
+.finding-message {
+  flex-basis: 100%;
+  margin: 0;
+  font: 14px / 1.55 var(--font-body);
+  color: var(--color-neutral-300);
+  text-wrap: pretty;
+}
+
+.file-findings {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-neutral-800);
+  border-radius: 8px;
+}
+
+.file-findings h3 {
+  margin: 0 0 4px;
+  font: 600 12px / 1.4 var(--font-body);
+  color: var(--color-neutral-400);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ---------------------------------------------------------------------------
+   The document, on CodeMirror.
+
+   Replaces the hand-built virtualized list (`.line`, `.preview-line` above).
+   The reading model is deliberately unchanged — tinted additions, removals
+   struck through where they were, a band above each change — so these rules
+   reuse the same colours the list used.
+   --------------------------------------------------------------------------- */
+
+/* CodeMirror owns the vertical scroller. Its base theme gives `.cm-editor` no height at all
+   and `.cm-scroller` `height: 100%`, so bounding the editor is the whole of it.
+
+   The pane body used to scroll instead, so that the file-level findings — a sibling above the
+   editor — would scroll with the document. They are a block widget inside it now, so that
+   reason is gone, and handing the scroller back buys what only CodeMirror can do with it:
+   `scrollSnapshot()` reads and writes `.cm-scroller`, so it records the top of the file and
+   restores nothing while an ancestor scrolls, and the height compensation that keeps a
+   restored position honest is gated on that same element. Per-tab scroll memory needs both. */
+.ts-document {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ts-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* `flex: 1; min-height: 0` rather than `height: 100%`: the base theme already makes this a
+   flex column, so it is a well-behaved flex item, and this needs no percentage to resolve
+   against a parent that is itself flex-sized. */
+.ts-editor .cm-editor {
+  flex: 1;
+  min-height: 0;
+  background: transparent;
+  color: var(--color-text);
+}
+
+.ts-editor .cm-editor.cm-focused {
+  outline: none;
+}
+
+.ts-editor .cm-scroller {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.9;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.ts-editor .cm-content {
+  caret-color: var(--color-accent);
+  /* Was the pane body's `padding: 0 24px 20px`. CodeMirror reads the content's own padding
+     into its height model, so this is the one place the document's insets belong — and it
+     keeps them off `.cm-scroller`, whose padding box the sticky gutter is positioned against. */
+  padding: 4px 24px 20px 0;
+}
+
+/* Sticky at the scroller's left edge, which only starts meaning anything now that the
+   scroller is the one that moves. It has to be opaque: `PlainCode` does not wrap lines, so a
+   transparent gutter lets code scroll visibly underneath the line numbers. */
+.ts-editor .cm-gutters {
+  background: var(--color-bg);
+  border-right: none;
+  color: var(--color-neutral-600);
+  user-select: none;
+}
+
+.ts-editor .cm-lineNumbers .cm-gutterElement {
+  padding: 0 9px 0 var(--space-4);
+  min-width: 38px;
+}
+
+.ts-editor .cm-activeLine,
+.ts-editor .cm-activeLineGutter {
+  background: transparent;
+}
+
+.ts-editor .cm-selectionBackground,
+.ts-editor .cm-content ::selection {
+  background: rgb(var(--accent-rgb) / 22%);
+}
+
+/* What the change actually rewrote. Same tint the list used. */
+.ts-editor .ts-add {
+  background: var(--add-wash);
+}
+
+/* The lines a question is about, held for as long as its box or its card is open. The same
+   accent as a live selection, a little quieter: a selection that has settled into a question
+   rather than one still being made. */
+.ts-editor .ts-asked {
+  background: rgb(var(--accent-rgb) / 14%);
+}
+
+/* What the agent removed stays legible, and stays struck, where it was. */
+.ts-removed {
+  background: var(--del);
+}
+
+.ts-removed-line {
+  padding-left: 47px;
+  white-space: pre;
+  color: var(--color-text);
+  text-decoration: line-through;
+  text-decoration-color: rgb(255 61 84 / 55%);
+}
+
+/* A run of unchanged lines that belongs to no change, folded away. */
+.ts-fold {
+  padding: var(--space-1) 0 var(--space-1) 47px;
+}
+
+.ts-fold-button {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--color-neutral-600);
+  cursor: pointer;
+}
+
+.ts-fold-button:hover {
+  color: var(--color-accent-400);
+}
+
+/* The cards set into the document: a change's band, a note, the note composer. Each is a
+   CodeMirror block widget that React renders into, so they only need spacing here. */
+.ts-band-host {
+  padding: var(--space-6) var(--space-4) var(--space-2);
+}
+
+/* The file-level findings, riding at the top of the document so they scroll with it. */
+.ts-file-findings-host {
+  padding: var(--space-6) var(--space-4) var(--space-2);
+}
+
+.ts-note-host,
+.ts-composer-host,
+.ts-ask-host {
+  padding: var(--space-2) var(--space-4) var(--space-3) 47px;
+}
+
+/* The gutter is the note handle now that selecting code means editing it. */
+.ts-editor .cm-lineNumbers .cm-gutterElement {
+  cursor: pointer;
+}
+
+.ts-editor .cm-lineNumbers .cm-gutterElement:hover {
+  color: var(--color-accent-400);
+}
+
+/* Unsaved work, and the one case where the file moved underneath it. */
+.ts-save {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-accent-900);
+  border-left: 2px solid var(--color-accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 12px;
+}
+
+.ts-save.conflict {
+  background: var(--del);
+  border-left-color: var(--remove);
+}
+
+.ts-save-what {
+  color: var(--color-accent-200);
+}
+
+.ts-save.conflict .ts-save-what {
+  color: var(--remove);
+}
+
+.ts-save .btn {
+  margin-left: auto;
+}
+
+/* The question box that opens beside a selection on a file with nothing on the board. Fixed,
+   like the pill, and for the same reason: nothing outside the editor can feed back into it. */
+.selection-question {
+  position: fixed;
+  z-index: 40;
+  transform: translate(8px, -3px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(420px, 60vw);
+  padding: 10px 12px;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 45%);
+}
+
+.selection-question-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.selection-question textarea {
+  width: 100%;
+  min-height: 34px;
+  max-height: 140px;
+  padding: 7px 9px;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+  resize: vertical;
+  font: 13px / 1.5 var(--font-body);
+  color: var(--color-text);
+  caret-color: var(--color-accent);
+}
+
+.selection-question textarea:focus-visible {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+.selection-question-hint {
+  font-size: 11px;
+  color: var(--color-neutral-600);
+}

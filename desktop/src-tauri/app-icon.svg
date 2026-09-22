@@ -1,0 +1,20 @@
+<!-- Master source for icons/*. The Turnstile mark's "App icon" tile treatment (see
+     `Turnstile Mark.dc.html`), at 58% of the tile, accent on the surface gradient. Regenerate
+     the whole icons/ set from this file with `bunx @tauri-apps/cli icon app-icon.svg` (run from
+     desktop/src-tauri) after any change here. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Turnstile</title>
+  <defs>
+    <linearGradient id="tile" x1="32.9%" y1="3%" x2="67.1%" y2="97%">
+      <stop offset="0%" stop-color="#232532"/>
+      <stop offset="100%" stop-color="#13141f"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="235" fill="url(#tile)"/>
+  <svg x="214" y="214" width="596" height="596" viewBox="0 0 32 32">
+    <title>Turnstile</title>
+    <path d="M4 8 H28" stroke="#9184d9" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M4 16 H15 M4 24 H15" stroke="#9184d9" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
+    <path d="M21 3 V29" stroke="#9184d9" stroke-width="3" stroke-linecap="round"/>
+  </svg>
+</svg>

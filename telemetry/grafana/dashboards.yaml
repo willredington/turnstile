@@ -1,0 +1,14 @@
+# Loads Turnstile's dashboard into the otel-lgtm image's Grafana at startup. Mounted by
+# `telemetry/compose.yaml` next to the image's own providers; edits to the JSON are picked up
+# within `updateIntervalSeconds`, no restart needed.
+apiVersion: 1
+
+providers:
+  - name: turnstile
+    type: file
+    updateIntervalSeconds: 10
+    # Edits made in the Grafana UI are allowed but not saved back here: export the JSON over
+    # `turnstile-dashboard.json` to keep one.
+    allowUiUpdates: true
+    options:
+      path: /otel-lgtm/turnstile-dashboards

@@ -1,0 +1,106 @@
+name: Bump version and tag
+
+# Manually triggered, no inputs: this reads the current whole-number version out of
+# package.json, adds 1, updates every file that tracks the app's version, commits that, tags
+# it `v<version>`, pushes both, then explicitly kicks off release.yml for the new tag — see the
+# comment on that workflow's `workflow_dispatch` trigger for why a plain tag push here wouldn't
+# do that on its own. Versions here are plain whole numbers (1, 2, 3, ...), not semver — nobody
+# has to remember or type the current version, just run the workflow.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bump-and-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The source of truth is root package.json's whole-number version. Cargo and Tauri both
+      # parse their own "version" fields as full 3-part semver (a bare "4" fails to parse and
+      # breaks the build), so this also derives a NEW_VERSION_SEMVER ("4.0.0") purely
+      # mechanically for those two files — nobody maintains that form by hand, it's just
+      # NEW_VERSION with ".0.0" appended, every run.
+      - name: Compute next version
+        run: |
+          CURRENT=$(jq -r .version package.json)
+          if ! [[ "$CURRENT" =~ ^[0-9]+$ ]]; then
+            echo "::error::package.json version '$CURRENT' isn't a plain whole number"
+            exit 1
+          fi
+          NEW_VERSION=$((CURRENT + 1))
+          echo "NEW_VERSION=$NEW_VERSION" >> "$GITHUB_ENV"
+          echo "NEW_VERSION_SEMVER=${NEW_VERSION}.0.0" >> "$GITHUB_ENV"
+          echo "Bumping version: $CURRENT -> $NEW_VERSION"
+
+      - name: Check tag doesn't already exist
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${NEW_VERSION}" > /dev/null 2>&1; then
+            echo "::error::Tag v${NEW_VERSION} already exists"
+            exit 1
+          fi
+
+      # jq is preinstalled on GitHub-hosted runners. Both package.json files have exactly one
+      # top-level "version" key each — a dependency named "version" isn't a thing, so this can't
+      # collide with anything in "dependencies"/"devDependencies" the way a blind text
+      # substitution risks.
+      - name: Bump package.json versions
+        run: |
+          for f in package.json desktop/package.json; do
+            jq --arg v "$NEW_VERSION" '.version = $v' "$f" > "$f.tmp"
+            mv "$f.tmp" "$f"
+          done
+
+      # tauri.conf.json's "version" is parsed by Tauri as semver, so it gets the derived
+      # NEW_VERSION_SEMVER form rather than the bare integer the other two files get.
+      - name: Bump tauri.conf.json version
+        run: |
+          f=desktop/src-tauri/tauri.conf.json
+          jq --arg v "$NEW_VERSION_SEMVER" '.version = $v' "$f" > "$f.tmp"
+          mv "$f.tmp" "$f"
+
+      # Cargo.toml can't go through the same jq treatment (it's TOML, and more importantly a
+      # blind `version = "..."` substitution would also hit dependency specifiers written in
+      # inline-table form, e.g. `tauri = { version = "2", ... }`) — this only touches the first
+      # `version = "..."` line inside the `[package]` table specifically. Cargo requires this
+      # field to be full semver, hence NEW_VERSION_SEMVER rather than the bare integer.
+      - name: Bump Cargo.toml version
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = "desktop/src-tauri/Cargo.toml";
+            const lines = fs.readFileSync(path, "utf8").split("\n");
+            let inPackage = false;
+            let replaced = false;
+            const out = lines.map((line) => {
+              if (/^\[.*\]/.test(line)) inPackage = line.trim() === "[package]";
+              if (inPackage && !replaced && /^version\s*=\s*".*"$/.test(line)) {
+                replaced = true;
+                return `version = "${process.env.NEW_VERSION_SEMVER}"`;
+              }
+              return line;
+            });
+            if (!replaced) throw new Error("No version line found in Cargo.toml [package]");
+            fs.writeFileSync(path, out.join("\n"));
+          '
+
+      # Cargo.lock's own entry for the local `desktop` package isn't touched here — cargo
+      # updates that itself, from Cargo.toml, the next time anything builds (release.yml, right
+      # after this), same as it would for any other Cargo.toml edit.
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json desktop/package.json desktop/src-tauri/tauri.conf.json desktop/src-tauri/Cargo.toml
+          git commit -m "chore: bump version to ${NEW_VERSION}"
+          git tag -a "v${NEW_VERSION}" -m "v${NEW_VERSION}"
+          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin "v${NEW_VERSION}"
+
+      - name: Trigger the release build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run release.yml --ref "v${NEW_VERSION}"

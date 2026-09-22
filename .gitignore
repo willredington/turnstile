@@ -1,0 +1,8 @@
+node_modules
+dist
+.turnstile
+.worktrees
+.superpowers
+.DS_Store
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
