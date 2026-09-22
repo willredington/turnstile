@@ -31,28 +31,113 @@ exists to catch — not friction to design away.
 
 ## Requirements
 
-- Bun 1.3+
-- A git repository (Turnstile offers to create one if missing)
-- An OpenRouter API key, for the review and for answering questions (see "The review" and
-  "Asking about code" below), with models that support tool calling
-- Claude Code authenticated however it normally is (its own login, or `ANTHROPIC_API_KEY` in
-  the environment) — Turnstile drives it through the Claude Agent SDK, which spawns the
-  `claude` CLI itself; it does not manage that authentication
+These steps assume macOS.
+
+- **Bun 1.3+**: builds Turnstile and runs it from source.
+- **Node.js and npm**: run the desktop app's Tauri tooling.
+- **Rust**, via rustup, plus the Xcode Command Line Tools. Tauri compiles the desktop shell with them.
+- **Claude Code, logged in.** Turnstile drives Claude Code through the Claude Agent SDK, which
+  spawns the `claude` CLI itself. The CLI authenticates however it normally does: its own login,
+  or `ANTHROPIC_API_KEY` in the environment. Turnstile does not manage that.
+- **An OpenRouter API key.** The review and the answers to your questions both use it (see "The
+  review" and "Asking about code" below). The models you pick must support tool calling.
+- **A git repository to work in.** If the folder you pick isn't one, Turnstile offers to create it.
 
 ## Setup
 
+### 1. Install the toolchain
+
 ```bash
-bun install
-bun link                # puts `turnstile` on your PATH
-cd /your/project
-turnstile init           # writes .turnstile/config.json, gitignores it
-export OPENROUTER_API_KEY=sk-or-...
-turnstile                # opens the app: serves the UI, opens a tab
+xcode-select --install                                   # skip if already installed
+brew install oven-sh/bun/bun node                        # Bun and Node/npm
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust
+npm install -g @anthropic-ai/claude-code && claude       # log in to Claude Code once, then exit
 ```
 
-`TURNSTILE_CLAUDE_CODE_EXECUTABLE` overrides which `claude` binary gets spawned, for the rare
-case the SDK's own resolution needs help finding it. `TURNSTILE_NO_BROWSER=1` suppresses the
-auto-opened tab; the URL is printed either way.
+### 2. Set your OpenRouter API key
+
+Create a key at <https://openrouter.ai/keys>, then export it from your shell profile so every
+terminal has it, including the one you launch the desktop app from:
+
+```bash
+echo 'export OPENROUTER_API_KEY=sk-or-...' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Turnstile reads the key only from the environment, never from a config file. The key is checked
+per request, so a missing one doesn't stop the app from starting. Each review and each question
+fails with an error on screen instead. To use a variable with a different name, set
+`openrouter.apiKeyEnv` in config.
+
+### 3. Write your user-level config
+
+A personal config at `~/.turnstile/config.json` applies to every repository you open. A repo's
+own `.turnstile/config.json`, if it has one, overrides it field by field (see "Two config
+locations" below).
+
+```bash
+mkdir -p ~/.turnstile
+cat > ~/.turnstile/config.json <<'EOF'
+{
+  "model": { "models": ["anthropic/claude-opus-5"], "temperature": 0 },
+  "ask": { "model": { "models": ["anthropic/claude-haiku-4.5"], "temperature": 0 } },
+  "openrouter": { "apiKeyEnv": "OPENROUTER_API_KEY" }
+}
+EOF
+```
+
+Any field you leave out takes its default. "Configuration" below lists every field. Turnstile
+**won't start** if this file isn't valid JSON or has a bad value, so a typo shows up right away
+instead of being ignored.
+
+### 4. Add at least one rule
+
+The review checks each changed file against your rules, and **a file that no rule covers is
+never reviewed**. Rules live outside the checkout, in
+`~/.turnstile/rules/<repository path with / and . turned into ->/`, one YAML file per rule. For
+a repo at `/Users/me/projects/my-app`:
+
+```bash
+mkdir -p ~/.turnstile/rules/-Users-me-projects-my-app
+```
+
+Turnstile prints the exact directory when it starts. "Rules" below covers the format.
+
+### 5. Install dependencies and run the desktop app
+
+```bash
+git clone https://github.com/willredington/turnstile.git
+cd turnstile
+bun install             # the app's own dependencies, needed to build the sidecar
+
+cd desktop
+npm install             # Tauri CLI and plugins
+npm run tauri dev       # builds dist/turnstile, compiles the Tauri shell, opens the window
+```
+
+The first `tauri dev` compiles the Rust side and takes a few minutes. Later runs are quicker.
+Each run rebuilds the `turnstile` binary first (`scripts/prepare-sidecar.mjs`), so the window
+always runs your current source. It prints the build's hash and commit as it starts. When the
+window opens, pick the repository you want to work in. To switch repositories later, use
+**File → Open Folder…** (⌘O).
+
+Launch it **from a terminal that has `OPENROUTER_API_KEY` set**. The app hands its environment
+down to Turnstile, so a key exported only in some other shell won't reach it.
+
+### Without the desktop app
+
+Turnstile also runs as a CLI that serves the same UI in a browser tab:
+
+```bash
+bun link                 # from the repo root: puts `turnstile` on your PATH
+cd /your/project
+turnstile                # serves the UI and opens a browser tab
+```
+
+`turnstile init` writes a repo-level `.turnstile/config.json`, if a project needs settings of its
+own. `TURNSTILE_NO_BROWSER=1` stops the tab from opening; the URL is printed either way.
+`TURNSTILE_CLAUDE_CODE_EXECUTABLE` tells Turnstile which `claude` binary to spawn, for the rare
+case where the SDK can't find one on its own.
 
 ## How a session goes
 
