@@ -10,6 +10,8 @@ each changed file reviewed against your repository's own rules. You read the dif
 and send those notes to the agent when you're ready. Nothing blocks: the agent is never held
 waiting for an approval.
 
+![A changed file open in Turnstile: the review rail on the left sorted by risk, the file with its change marked and the rules it breaks, and the conversation below](docs/images/board.png)
+
 > Turnstile began as a blocking review gate: after every turn the agent waited until you
 > approved or sent back each change. That design was replaced by the one described here.
 
@@ -212,6 +214,8 @@ A note is anchored to a file and a line range, and quotes the lines as they read
 it, so the agent knows which version of the code you were looking at. Notes are kept per
 session and survive restarts.
 
+![A note left on a changed line, marked not sent, with Send notes in the file's header](docs/images/note.png)
+
 A note is about the file as it stood when you wrote it, so **any change to that file clears
 every note on it**, sent or not — a note left pointing at a line it is no longer about is worse
 than none. Notes on other files are untouched.
@@ -290,6 +294,8 @@ so `^mcp__some-server__` denies a whole MCP server by name.
 
 Plan mode is available from the compose box: the agent can only read and plan until you answer
 the plan it submits.
+
+![A submitted plan pinned at the top of the review rail, rendered as a document with Send back and Approve plan](docs/images/plan.png)
 
 While it is on, anything that does more than read stops for you — not just file writes through
 Turnstile's own tool, but shell commands too. Exploring stays silent (`ls`, `cat`, `rg`,
@@ -720,7 +726,7 @@ bun src/cli/main.ts    # run from source, against the current directory
 
 `bun run simulate` starts the real web server against a fake, hand-built session — fixed files,
 a fixed diff, a fixed transcript — so you can iterate on the UI without an agent, git repo, or
-model call.
+model call. The screenshots in this README were taken from it.
 
 For the real thing, run it against a scratch repository — the agent works directly in whatever
 checkout Turnstile was launched in.
