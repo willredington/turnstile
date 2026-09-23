@@ -1,5 +1,7 @@
 import { serveApp } from '../src/adapters/web/server.ts'
+import { createAutoMode } from '../src/app/autoMode.ts'
 import { PLAN_PATH } from '../src/core/annotations.ts'
+import type { AutoModePolicy } from '../src/core/autoMode.ts'
 import type {
   Asker,
   ProjectTree,
@@ -802,6 +804,38 @@ const fakeRoots: RootRegistry = {
   teardown: async () => {},
 }
 
+/**
+ * Auto-mode with a judge that matches words instead of asking a model: a command sharing a word
+ * with a statement ("git push" and "…(git push, …)") scores high, anything else low. Enough to
+ * drive the setup screen and its "Try a command" box with no key. Starts with nothing saved, so
+ * the page opens on setup, as a first run does.
+ */
+let simulatedPolicy: AutoModePolicy | null = null
+const wordsOf = (text: string): string[] => text.toLowerCase().match(/[a-z][a-z-]{2,}/g) ?? []
+const fakeAutoMode = createAutoMode({
+  store: {
+    load: async () => simulatedPolicy,
+    save: async (policy) => {
+      simulatedPolicy = policy
+    },
+  },
+  judge: {
+    judge: async (state, rules) => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      const said = new Set(wordsOf(String(state.call.command ?? state.call.input)))
+      return new Map(
+        rules.map((rule) => [
+          rule.id,
+          wordsOf(rule.text).some((word) => said.has(word)) ? 0.85 : 0.04,
+        ]),
+      )
+    },
+  },
+  where: { cwd: process.cwd(), home: process.env.HOME ?? '/' },
+  timeoutMs: 5_000,
+})
+await fakeAutoMode.load()
+
 const server = serveApp({
   session: fakeSession,
   projectTree: fakeProjectTree,
@@ -809,6 +843,7 @@ const server = serveApp({
   reader: fakeReader,
   roots: fakeRoots,
   cwd: process.cwd(),
+  autoMode: fakeAutoMode,
   onListening: (url) => {
     process.stdout.write(`turnstile (simulated): ${url}\n`)
   },

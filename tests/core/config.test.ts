@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadConfig, userConfigPath } from '../../src/adapters/fs/config.ts'
+import { loadConfig, loadLegacyDenyPatterns, userConfigPath } from '../../src/adapters/fs/config.ts'
 import { ConfigSchema, DEFAULT_CONFIG } from '../../src/core/config.ts'
 
 let dir: string
@@ -73,7 +73,7 @@ describe('loadConfig', () => {
   })
 
   /** The same for the brief experiment with TypeSafe rule checks, which the reviewer replaced. */
-  test('ignores settings from the TypeSafe rule checks', async () => {
+  test('reads a typesafe section again, now for auto-mode, and still ignores old review keys', async () => {
     await Bun.write(
       join(dir, '.turnstile/config.json'),
       JSON.stringify({
@@ -82,7 +82,7 @@ describe('loadConfig', () => {
       }),
     )
     const config = await loadConfig(dir, home)
-    expect(config).not.toHaveProperty('typesafe')
+    expect(config.typesafe.model).toBe('jev-latest')
     expect(config.review).not.toHaveProperty('threshold')
   })
 
@@ -95,7 +95,11 @@ describe('loadConfig', () => {
       specPaths: [],
     })
     expect(config.openrouter.apiKeyEnv).toBe('OPENROUTER_API_KEY')
-    expect(config.toolPermissions).toEqual({ denyPatterns: [] })
+    expect(config.typesafe).toEqual({
+      apiKeyEnv: 'TYPESAFE_API_KEY',
+      model: 'jev-latest',
+      timeoutMs: 5_000,
+    })
   })
 
   /**
@@ -123,12 +127,13 @@ describe('loadConfig', () => {
     await expect(loadConfig(dir, home)).rejects.toThrow('openrouter.apiKeyEnv')
   })
 
-  test('rejects an invalid deny-pattern regex', async () => {
+  test('a leftover toolPermissions key no longer stops the app starting', async () => {
     await Bun.write(
       join(dir, '.turnstile/config.json'),
       JSON.stringify({ toolPermissions: { denyPatterns: ['('] } }),
     )
-    await expect(loadConfig(dir, home)).rejects.toThrow('toolPermissions.denyPatterns')
+    const config = await loadConfig(dir, home)
+    expect('toolPermissions' in config).toBe(false)
   })
 })
 
@@ -180,19 +185,18 @@ describe('user-level config', () => {
     expect(config.riskBar.neverReview).toEqual(['repo/**'])
   })
 
-  test('toolPermissions.denyPatterns replaces rather than concatenates too', async () => {
+  test('legacy deny patterns are read for migration, the repo layer winning', async () => {
+    expect(await loadLegacyDenyPatterns(dir, home)).toEqual([])
     await Bun.write(
       join(home, '.turnstile/config.json'),
-      JSON.stringify({
-        toolPermissions: { denyPatterns: ['^personal$'] },
-      }),
+      JSON.stringify({ toolPermissions: { denyPatterns: ['^personal$'] } }),
     )
+    expect(await loadLegacyDenyPatterns(dir, home)).toEqual(['^personal$'])
     await Bun.write(
       join(dir, '.turnstile/config.json'),
       JSON.stringify({ toolPermissions: { denyPatterns: ['^repo$'] } }),
     )
-    const config = await loadConfig(dir, home)
-    expect(config.toolPermissions.denyPatterns).toEqual(['^repo$'])
+    expect(await loadLegacyDenyPatterns(dir, home)).toEqual(['^repo$'])
   })
 
   test('throws naming the user config path when only it is malformed', async () => {
@@ -238,23 +242,8 @@ describe('specPaths', () => {
   })
 })
 
-describe('toolPermissions', () => {
-  test('defaults to no deny patterns', () => {
-    expect(DEFAULT_CONFIG.toolPermissions.denyPatterns).toEqual([])
-  })
-
-  test('accepts valid regex strings', () => {
-    const parsed = ConfigSchema.parse({
-      toolPermissions: { denyPatterns: ['^WebFetch$', 'rm -rf'] },
-    })
-    expect(parsed.toolPermissions.denyPatterns).toEqual(['^WebFetch$', 'rm -rf'])
-  })
-
-  test('rejects an invalid regex string', () => {
-    expect(() =>
-      ConfigSchema.parse({
-        toolPermissions: { denyPatterns: ['('] },
-      }),
-    ).toThrow()
+describe('typesafe', () => {
+  test('rejects a timeout too short to answer in', () => {
+    expect(() => ConfigSchema.parse({ typesafe: { timeoutMs: 10 } })).toThrow()
   })
 })

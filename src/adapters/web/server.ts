@@ -1,7 +1,9 @@
 import { homedir } from 'node:os'
 import { type AskAnchor, askPayload } from '../../core/ask.ts'
+import { parsePolicy } from '../../core/autoMode.ts'
 import type {
   Asker,
+  AutoModeControl,
   ProjectTree,
   RepoReader,
   RootRegistry,
@@ -42,6 +44,11 @@ export type ServerOptions = {
   cwd: string
   /** Where measurements the browser reports are exported. Silent by default. */
   telemetry?: Telemetry
+  /**
+   * Auto-mode's setup screen: the saved policy, saving a new one, and dry runs. Absent, the
+   * routes answer 404 and the page offers no setup.
+   */
+  autoMode?: AutoModeControl
   port?: number
   /** Injectable so tests can bind an ephemeral port and still learn which one. */
   onListening?: (url: string) => void
@@ -553,6 +560,39 @@ export function serveApp(options: ServerOptions) {
         },
       },
 
+      '/auto-mode': {
+        GET: () =>
+          options.autoMode === undefined
+            ? json({ error: 'auto-mode is not available' }, 404)
+            : json(options.autoMode.settings()),
+        PUT: async (request: Request) => {
+          if (options.autoMode === undefined)
+            return json({ error: 'auto-mode is not available' }, 404)
+          const policy = parsePolicy(await body(request))
+          if (policy === null) return json({ error: 'not a valid auto-mode policy' }, 400)
+          await options.autoMode.save(policy)
+          return json(options.autoMode.settings())
+        },
+      },
+
+      /**
+       * A dry run from the setup screen: how each statement answers for a call nobody is making,
+       * against the statements as they stand on screen — saved or not — so they can be reworded
+       * before anything depends on them.
+       */
+      '/auto-mode/trial': {
+        POST: async (request: Request) => {
+          if (options.autoMode === undefined)
+            return json({ error: 'auto-mode is not available' }, 404)
+          const parsed = await body(request)
+          const policy = parsePolicy(parsed?.policy)
+          if (policy === null) return json({ error: 'not a valid auto-mode policy' }, 400)
+          const command = typeof parsed?.command === 'string' ? parsed.command.trim() : ''
+          if (command === '') return json({ error: 'command required' }, 400)
+          return json(await options.autoMode.trial('Bash', { command }, policy))
+        },
+      },
+
       '/plan-mode': {
         POST: async (request: Request) => {
           const parsed = await body(request)
@@ -573,7 +613,7 @@ export function serveApp(options: ServerOptions) {
 
       /**
        * The decision on a submitted plan. Both rules below are enforced here as well as in the
-       * page, because the page can be a round behind — a laggy socket, or a second browser tab
+       * page, because the page can be a round behind — a laggy socket, or a second window
        * looking at the same session — and either mistake silently destroys written work.
        */
       '/plan-review': {

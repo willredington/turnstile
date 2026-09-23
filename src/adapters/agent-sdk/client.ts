@@ -14,15 +14,16 @@ import {
   tool,
 } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
+import type { AutoModeVerdict } from '../../core/autoMode.ts'
 import { describePermissionRequest } from '../../core/permissionPrompt.ts'
 import { planFileName } from '../../core/planFile.ts'
-import type { AgentConnection, AgentConnectionFactory, AgentHistory } from '../../core/ports.ts'
-import {
-  compileDenyPatterns,
-  isAutoApprovedTool,
-  isReadOnlyCall,
-  reservedPathIn,
-} from '../../core/toolSafety.ts'
+import type {
+  AgentConnection,
+  AgentConnectionFactory,
+  AgentHistory,
+  AutoApprover,
+} from '../../core/ports.ts'
+import { isReadOnlyCall, reservedPathIn } from '../../core/toolSafety.ts'
 import type { AgentEvent, AgentQuestion, PlanModeStatus, SessionSummary } from '../../core/types.ts'
 import { resolveExecutable } from './resolveExecutable.ts'
 
@@ -51,10 +52,11 @@ export type AgentSdkClientOptions = {
   onEvent: (event: AgentEvent) => void
   writeFile: WriteFile
   requestPlanApproval: RequestPlanApproval
-  /** Regex strings from `toolPermissions.denyPatterns` (see `core/toolSafety.ts`), compiled
-   *  once via `compileDenyPatterns` before the connection opens. Defaults to no deny patterns
-   *  beyond the built-in sudo floor. */
-  denyPatterns?: string[]
+  /**
+   * Decides whether a tool call runs without asking (`app/autoMode.ts`). Asked on every call
+   * nothing earlier settled. Without one, auto-mode is off and every such call prompts.
+   */
+  autoApprover?: AutoApprover
   /**
    * Paths the agent is refused any tool call naming (`core/toolSafety.ts`'s `reservedPathIn`):
    * Turnstile's own state, which is not the agent's to read or change. Defaults to none.
@@ -450,10 +452,11 @@ function parseQuestions(input: Record<string, unknown>): AgentQuestion[] {
  *   checkout (writing `/tmp` or `~` otherwise fails), so the sandbox only takes away `dirs`.
  *   Network access still works: each new host arrives at `canUseTool` as `SandboxNetworkAccess`
  *   and is approved like any other tool.
- * - `autoAllowBashIfSandboxed: false`, so every Bash call still reaches `canUseTool` — the sudo
- *   floor and `denyPatterns` would otherwise be skipped for sandboxed commands.
- * - A command can ask to run outside the sandbox (`dangerouslyDisableSandbox`); `canUseTool`
- *   puts every such request to the human rather than auto-approving it.
+ * - `autoAllowBashIfSandboxed: false`, so every Bash call still reaches `canUseTool` — auto-mode
+ *   would otherwise be skipped for sandboxed commands.
+ * - A command can ask to run outside the sandbox (`dangerouslyDisableSandbox`). That goes to
+ *   auto-mode like anything else, with the flag in what the judge is shown; the suggested
+ *   statements include one for it.
  * - `failIfUnavailable: false`: where the sandbox cannot start (Linux without bubblewrap), the
  *   agent still runs, protected by the deny rules and `reservedPathIn` alone, rather than not
  *   at all.
@@ -486,37 +489,36 @@ export function protectionOptions(dirs: readonly string[]): Pick<Options, 'setti
  * front of it isn't just noise — since nothing here ever answers it, it silently deadlocks
  * every write.
  *
- * `AskUserQuestion` is also special-cased ahead of `isAutoApprovedTool`, for the mirror-image
+ * `AskUserQuestion` is also special-cased ahead of auto-mode, for the mirror-image
  * reason: the SDK routes it through this same `canUseTool` callback (see the Agent SDK's "user
- * input" guide), and it used to fall straight into the denylist's "everything auto-approves by
- * default" path — meaning Claude's clarifying questions were silently rubber-stamped with
+ * input" guide), and it used to fall straight into the "everything auto-approves by default" path
+ * of the denylist auto-mode replaced — meaning Claude's clarifying questions were silently rubber-stamped with
  * whatever input it proposed, `answers` included, and never actually reached a human. Answering
  * it correctly means resolving with `{ questions, answers }` in `updatedInput`, not a plain
  * allow/deny, so it needs its own event shape (`kind: 'question'`) rather than the flat
  * options list the generic prompt below sends.
  *
- * `isAutoApprovedTool` (see `core/toolSafety.ts`) is checked next, before a prompt is ever
+ * Auto-mode (`autoApprover`, see `core/autoMode.ts`) is asked next, before a prompt is ever
  * raised: supplying `canUseTool` at all opts out of Claude Code's own built-in read-only
- * detection (a plain `git status` or `cat` would never prompt in the bare CLI), and without
- * this check Turnstile would prompt for everything, always. It's a denylist, not an allowlist:
- * everything auto-approves except the hardcoded `sudo` floor and whatever the user configured
- * in `toolPermissions.denyPatterns`; only those get the human prompt below.
+ * detection (a plain `git status` or `cat` would never prompt in the bare CLI), and without it
+ * Turnstile would prompt for everything, always. It judges the call against the user's own
+ * statements of what to flag; anything but an `allow` — a flag, a judge that could not answer,
+ * auto-mode not set up — gets the human prompt below.
  *
  * `ExitPlanMode` is special-cased ahead of everything else, for the same reason
  * `AskUserQuestion` is: the SDK routes it through this same callback, and without a case for it
- * by name it would fall straight into the denylist and auto-allow, meaning a submitted plan
+ * by name it would fall straight into auto-mode and could be auto-allowed, meaning a submitted plan
  * would never actually reach a human. Confirmed live against a real session that the plan text
  * is on `input.plan` directly (the SDK's own type defs only document a deprecated field there)
  * — so it's read straight off `input`, never reconstructed from transcript text.
  *
  * The write-tool bypass just below is now conditional on `planModeRef`: confirmed live that the
  * model itself never attempts a write while genuinely in plan mode, but nothing here should
- * depend on that restraint holding — denying it explicitly is defense in depth, the same
- * fail-closed posture `compileDenyPatterns` already takes elsewhere in this file.
+ * depend on that restraint holding — denying it explicitly is defense in depth.
  */
 function buildCanUseTool(
   onEvent: (event: AgentEvent) => void,
-  denyPatterns: readonly RegExp[],
+  autoApprover: AutoApprover | undefined,
   reservedPaths: readonly string[],
   requestPlanApproval: RequestPlanApproval,
   planModeRef: { current: PlanModeStatus },
@@ -581,14 +583,11 @@ function buildCanUseTool(
       return { behavior: 'allow', updatedInput: { questions, answers } }
     }
 
-    // A command asking to leave the sandbox would leave the protected directories with it.
-    const unsandboxed = toolName === 'Bash' && input.dangerouslyDisableSandbox === true
-
     /**
      * Plan mode used to stop at the write tool and nowhere else, which was not enough.
      *
      * `isWriteTool` above was the only thing plan mode checked, and every other tool —
-     * `Bash` first among them — fell straight through to the denylist and auto-approved. So an
+     * `Bash` first among them — fell straight through to auto-approval. So an
      * agent restricted to planning could not call `propose_edit`, and could still write
      * anywhere in the checkout with `cat >`, `sed -i` or a heredoc, silently. The README's
      * promise that it "can only read and plan until you approve" was not true.
@@ -600,12 +599,17 @@ function buildCanUseTool(
      * Declining here is not denying: the call goes to the human with plan mode named as the
      * reason. Installing a dependency while planning stays possible, and stops being silent.
      */
-    const planRestricted =
-      planModeRef.current === 'plan' && !unsandboxed && !isReadOnlyCall(toolName, input)
-    const autoApproved = isAutoApprovedTool(toolName, input, denyPatterns)
+    const planRestricted = planModeRef.current === 'plan' && !isReadOnlyCall(toolName, input)
 
-    if (!unsandboxed && !planRestricted && autoApproved) {
-      return { behavior: 'allow' }
+    // Plan mode has already decided that one goes to the human; asking auto-mode as well would
+    // only make the reader wait for a judgment that cannot change that.
+    let verdict: AutoModeVerdict | undefined
+    if (!planRestricted) {
+      verdict =
+        autoApprover === undefined
+          ? { kind: 'off' }
+          : await autoApprover.verdict(toolName, input, callOptions.signal)
+      if (verdict.kind === 'allow') return { behavior: 'allow' }
     }
 
     counter += 1
@@ -618,9 +622,8 @@ function buildCanUseTool(
     const prompt = describePermissionRequest(toolName, input, {
       title: callOptions.title,
       blockedPath: callOptions.blockedPath,
-      // Only when plan mode is the whole reason. A call the user's own deny pattern already
-      // refuses should say so — that rule outlives the mode.
-      planRestricted: planRestricted && autoApproved,
+      planRestricted,
+      verdict,
     })
 
     // No timeout, deliberately: the agent is blocked and the turn cannot proceed, so a
@@ -634,6 +637,7 @@ function buildCanUseTool(
         subject: prompt.subject,
         description: prompt.description,
         reason: prompt.reason,
+        flagged: prompt.flagged,
         options: [
           { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
           { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
@@ -664,7 +668,6 @@ export function connectAgentSdk(options: AgentSdkClientOptions): AgentConnection
   const { cwd, onEvent, writeFile, requestPlanApproval } = options
   const queryFn = options.queryFn ?? query
   const getSessionMessagesFn = options.getSessionMessagesFn ?? getSessionMessages
-  const deniedPatterns = compileDenyPatterns(options.denyPatterns ?? [])
 
   const plansDir = options.plansDir
   const server = createSdkMcpServer({
@@ -685,7 +688,7 @@ export function connectAgentSdk(options: AgentSdkClientOptions): AgentConnection
     answerQuestion: resolveQuestion,
   } = buildCanUseTool(
     onEvent,
-    deniedPatterns,
+    options.autoApprover,
     options.reservedPaths ?? [],
     requestPlanApproval,
     planModeRef,

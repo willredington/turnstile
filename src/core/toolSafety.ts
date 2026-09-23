@@ -1,28 +1,15 @@
 /**
- * Decides which tool calls the agent-sdk client can auto-allow without blocking on a human.
+ * The two deterministic rules about tool calls that sit in front of auto-mode.
  *
- * The Claude Code CLI, run on its own, never prompts for an ordinary `git status` or `cat`:
- * it has its own built-in read-only detection. That detection disappears the moment a
- * consumer supplies a `canUseTool` callback (as `adapters/agent-sdk/client.ts` must, to gate
- * tool calls at all) — the SDK routes every non-disallowed tool call through the consumer's
- * callback instead, with no fallback to any built-in list. Without this module, that means
- * Turnstile would prompt for everything, always.
+ * Whether an ordinary call runs without asking is auto-mode's to decide, against the user's own
+ * statements (`core/autoMode.ts`). What is left here is what no statement should be able to
+ * change:
  *
- * This is a denylist, not an allowlist: every tool call auto-approves by default — every MCP
- * tool, `WebFetch`, `Task`, any Bash command — except a tiny hardcoded floor (`sudo`, via
- * `containsSudoInvocation`, which survives with zero user config) and whatever the user adds
- * to `toolPermissions.denyPatterns` in config. A deny pattern matches the full Bash command
- * text when the tool is `Bash`, and the tool name for everything else — so a user can write
- * `rm -rf` to deny that specific shape of command, or `^mcp__some-server__` to deny a whole
- * MCP server, while leaving everything else auto-approved.
+ * - `reservedPathIn`: Turnstile's own state is refused outright, never put to anyone.
+ * - `isReadOnlyCall`: while plan mode is on, only calls that read may run unasked. An
+ *   allowlist, because plan mode's whole promise is that nothing changed.
  *
- * Deliberately the opposite bias from the allowlist this replaced: a hole here costs nothing
- * by design, since the user explicitly chose to trade the old safety margin (every unrecognized
- * tool call costs a prompt) for fewer interruptions, denying only what they name.
- *
- * **Plan mode is the exception, and it is at the bottom of this file.** `isReadOnlyCall` is an
- * allowlist, because the bias above is wrong for a mode whose entire promise is that nothing
- * changed. Both live here so the two rules cannot drift apart or be reasoned about separately.
+ * Both are text matching over tool input, not sandboxes. They are gates in front of a human.
  */
 
 const STAGE_SEPARATOR = /&&|\|\||;|\|/
@@ -33,64 +20,6 @@ function splitEnvPrefix(tokens: string[]): string[] {
     i += 1
   }
   return tokens.slice(i)
-}
-
-/**
- * True when `sudo` is invoked as a command in any `&&`/`||`/`;`/`|`-separated stage of a
- * (possibly compound) Bash command — the one hardcoded denial that survives with zero user
- * config. Splitting on those operators is not full shell parsing and can be fooled by one
- * hidden inside quotes, the same tolerance the allowlist this replaced always accepted.
- */
-export function containsSudoInvocation(command: string): boolean {
-  return command.split(STAGE_SEPARATOR).some((stage) => {
-    const tokens = splitEnvPrefix(stage.trim().split(/\s+/).filter(Boolean))
-    return tokens[0] === 'sudo'
-  })
-}
-
-/**
- * Compiles `toolPermissions.denyPatterns` config strings into `RegExp`s. Schema validation
- * (`ToolPermissionsConfigSchema`) already guarantees these compile when they came through
- * `loadConfig` — this throws anyway, rather than silently dropping a bad pattern, as a second,
- * independent fail-closed layer for any caller that builds `AgentSdkClientOptions` directly
- * (a test, or a future non-file config source) without going through that schema. A
- * silently-skipped deny pattern is a security-relevant hole, not a cosmetic bug, so this must
- * not degrade gracefully.
- */
-export function compileDenyPatterns(patterns: readonly string[]): RegExp[] {
-  return patterns.map((pattern, index) => {
-    try {
-      return new RegExp(pattern)
-    } catch (cause) {
-      throw new Error(
-        `toolPermissions.denyPatterns[${index}] (${pattern}) is not a valid regular expression`,
-        { cause },
-      )
-    }
-  })
-}
-
-/**
- * Whether a tool call can be auto-allowed without asking a human — the gate `canUseTool`
- * checks before it ever surfaces a prompt. `denyPatterns` are matched against the full command
- * text for `Bash` calls, and the tool name for everything else. A `Bash` call with a missing or
- * non-string `command` (never happens from the real SDK) falls back to matching patterns
- * against the literal tool name `'Bash'` rather than skipping matching altogether, but skips
- * the sudo check since there's no command text to inspect.
- */
-export function isAutoApprovedTool(
-  toolName: string,
-  input: Record<string, unknown>,
-  denyPatterns: readonly RegExp[] = [],
-): boolean {
-  const command = toolName === 'Bash' && typeof input.command === 'string' ? input.command : null
-
-  if (command !== null && containsSudoInvocation(command)) return false
-
-  const subject = command ?? toolName
-  if (denyPatterns.some((pattern) => pattern.test(subject))) return false
-
-  return true
 }
 
 /**
@@ -283,8 +212,8 @@ function stageIsReadOnly(stage: string): boolean {
  * without checking whether it is quoted — a `grep` for a literal `>` therefore costs a prompt,
  * which is the correct direction to be wrong in.
  *
- * This is text matching, not shell parsing, and it can be fooled the same way
- * `containsSudoInvocation` can — by an operator hidden inside quotes. It is a gate in front of
+ * This is text matching, not shell parsing, and it can be fooled by an operator
+ * hidden inside quotes. It is a gate in front of
  * a human, not a sandbox: everything it declines is still offered to the reader to allow.
  */
 function isReadOnlyCommand(command: string): boolean {
@@ -296,13 +225,11 @@ function isReadOnlyCommand(command: string): boolean {
 /**
  * Whether a tool call changes nothing, and so may run while the agent is restricted to planning.
  *
- * **This is an allowlist, and that is a deliberate inversion** of the denylist the rest of this
- * module is built on. The bias there — auto-approve unless the user named it — is the right one
- * for ordinary work, where the cost of a hole is a review that catches the edit anyway. Plan
- * mode has no such backstop: its whole promise is that nothing changed while you were reading
- * the plan, and a promise kept by a denylist is kept only against the writes somebody thought
- * to name. The user turning plan mode on is asking for the stricter bias, for as long as it is
- * on.
+ * **This is an allowlist.** Auto-mode flags what the user's statements describe; plan mode has
+ * nothing like that to lean on — its whole promise is that nothing changed while you were
+ * reading the plan, and a promise kept by naming the bad cases is kept only against the ones
+ * somebody thought to name. The user turning plan mode on is asking for the stricter bias, for
+ * as long as it is on.
  *
  * Declining is not denying. A call that fails this goes to the human with plan mode given as
  * the reason, so a build or an install during planning stays possible and stays visible.

@@ -1233,6 +1233,133 @@ button:disabled {
   margin: var(--space-4) 0 0;
 }
 
+/* ── Auto-mode: the flagged statements on a prompt, and the setup screen ── */
+
+.permission-flagged {
+  margin: 0 0 var(--space-6);
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 12px;
+}
+
+.permission-flagged-item {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--med);
+  background: rgb(var(--med-rgb) / 8%);
+}
+
+.permission-flagged-score {
+  color: var(--med);
+  font-variant-numeric: tabular-nums;
+}
+
+.auto-mode-card {
+  width: min(640px, 100%);
+  max-height: min(88vh, 860px);
+  overflow-y: auto;
+}
+
+.auto-mode-card input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.auto-mode-rules {
+  margin: var(--space-4) 0 var(--space-3);
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.auto-mode-rule {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.auto-mode-rule-off .auto-mode-rule-text {
+  color: var(--muted);
+}
+
+.auto-mode-score {
+  min-width: 3.5em;
+  text-align: right;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.auto-mode-score-fired {
+  color: var(--med);
+  font-weight: 600;
+}
+
+.auto-mode-remove {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  justify-content: center;
+}
+
+.auto-mode-add {
+  display: flex;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+}
+
+.auto-mode-sensitivity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  border: 0;
+}
+
+.auto-mode-sensitivity legend {
+  float: left;
+  margin-right: var(--space-2);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.auto-mode-verdict {
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.auto-mode-error {
+  color: var(--high);
+}
+
+.auto-mode-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.top-bar-auto-mode-off {
+  border-color: var(--med);
+  color: var(--med);
+}
+
 /* ── The AskUserQuestion overlay: one or more multiple-choice questions, answered together ── */
 
 .question-card {

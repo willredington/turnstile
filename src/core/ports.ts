@@ -1,4 +1,12 @@
 import type {
+  AutoModePolicy,
+  AutoModeRule,
+  AutoModeSettings,
+  AutoModeTrial,
+  AutoModeVerdict,
+  CallState,
+} from './autoMode.ts'
+import type {
   AgentEvent,
   Annotation,
   BaselineSource,
@@ -540,4 +548,52 @@ export interface Telemetry {
   record(name: string, value: number, attrs?: Attributes): void
   /** Push anything buffered to the collector. Called before the process exits. */
   flush(): Promise<void>
+}
+
+/**
+ * Asks, for one tool call, how likely it is to do what each of the user's auto-mode statements
+ * describes (`adapters/typesafe/judge.ts`, one TypeSafe Noul per rule in a single request).
+ *
+ * Only the questions: turning the answers into allow-or-ask is `core/autoMode.ts`'s `decide`,
+ * so the policy can be tested without a model. Throws when it cannot answer; the caller treats
+ * that as "ask the human".
+ */
+export interface CallJudge {
+  judge(
+    state: CallState,
+    rules: readonly AutoModeRule[],
+    signal?: AbortSignal,
+  ): Promise<Map<string, number>>
+}
+
+/** The user's auto-mode policy, kept per user rather than per repository (`adapters/fs/autoMode.ts`). */
+export interface AutoModeStore {
+  /** Null when there is none, or it cannot be read as one. */
+  load(): Promise<AutoModePolicy | null>
+  save(policy: AutoModePolicy): Promise<void>
+}
+
+/**
+ * Whether one tool call may run without asking. The agent connection's `canUseTool` calls this
+ * for every call no earlier rule settled (`app/autoMode.ts`). Never throws: a failure is the
+ * `unavailable` verdict, which asks the human.
+ */
+export interface AutoApprover {
+  verdict(
+    toolName: string,
+    input: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<AutoModeVerdict>
+}
+
+/** The setup screen's view of auto-mode, served over HTTP (`adapters/web/server.ts`). */
+export interface AutoModeControl extends AutoApprover {
+  settings(): AutoModeSettings
+  save(policy: AutoModePolicy): Promise<void>
+  /** A dry run over a call that is not being made, against a policy that may not be saved yet. */
+  trial(
+    toolName: string,
+    input: Record<string, unknown>,
+    policy: AutoModePolicy,
+  ): Promise<AutoModeTrial>
 }

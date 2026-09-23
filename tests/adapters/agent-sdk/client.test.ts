@@ -16,6 +16,8 @@ import {
   buildWriteTool,
   connectAgentSdk,
 } from '../../../src/adapters/agent-sdk/client.ts'
+import type { AutoModeVerdict } from '../../../src/core/autoMode.ts'
+import type { AutoApprover } from '../../../src/core/ports.ts'
 import type { AgentEvent } from '../../../src/core/types.ts'
 
 /**
@@ -23,6 +25,27 @@ import type { AgentEvent } from '../../../src/core/types.ts'
  * async generator the test pushes scripted `SDKMessage`s into, and records everything sent
  * into the streaming-input side and every `Options` it was called with.
  */
+/** Auto-mode answering every call with `verdict`, recording what it was asked. */
+function fakeApprover(
+  verdict:
+    | AutoModeVerdict
+    | ((toolName: string, input: Record<string, unknown>) => AutoModeVerdict) = { kind: 'allow' },
+) {
+  const asked: { toolName: string; input: Record<string, unknown>; signal?: AbortSignal }[] = []
+  const approver: AutoApprover = {
+    verdict: async (toolName, input, signal) => {
+      asked.push({ toolName, input, ...(signal === undefined ? {} : { signal }) })
+      return typeof verdict === 'function' ? verdict(toolName, input) : verdict
+    },
+  }
+  return { approver, asked }
+}
+
+const FLAGGED: AutoModeVerdict = {
+  kind: 'flag',
+  fired: [{ rule: { id: 'push', text: 'Pushes to a remote' }, probability: 0.91 }],
+}
+
 function fakeQueryFn() {
   const calls: { options: Options }[] = []
   const sent: SDKUserMessage[] = []
@@ -796,15 +819,17 @@ describe('connectAgentSdk', () => {
     })
   })
 
-  test('canUseTool: Bash and any other tool auto-allow by default, with no prompt', async () => {
+  test('canUseTool: a call auto-mode allows runs with no prompt, and auto-mode is asked about each', async () => {
     const fake = fakeQueryFn()
     const events: { kind: string }[] = []
+    const { approver, asked } = fakeApprover()
     const client = connectAgentSdk({
       cwd: '/repo',
       onEvent: (event) => events.push(event as never),
       writeFile: async () => ({ decision: 'allow', fileContent: '' }),
       requestPlanApproval: async () => ({ decision: 'allow' }),
       queryFn: fake.queryFn,
+      autoApprover: approver,
     })
 
     const started = client.start('sess-1')
@@ -835,12 +860,20 @@ describe('connectAgentSdk', () => {
     expect(readResult).toEqual({ behavior: 'allow' })
     expect(mcpResult).toEqual({ behavior: 'allow' })
     expect(events.some((e) => e.kind === 'permission')).toBe(false)
+    expect(asked.map((call) => call.toolName)).toEqual([
+      'Bash',
+      'Read',
+      'mcp__plugin_claude-mem_mcp-search__get_observations',
+    ])
+    expect(asked[0]?.input).toEqual({ command: 'git status' })
+    // The SDK's own signal is passed through, so an interrupt stops the judge too.
+    expect(asked[0]?.signal).toBeInstanceOf(AbortSignal)
   })
 
   /**
-   * The bug this catches: `AskUserQuestion` is just another tool name to `isAutoApprovedTool`
-   * (see `core/toolSafety.ts`'s denylist), so without a special case it used to fall straight
-   * into the "everything auto-allows" path above — `{ behavior: 'allow' }`, no `updatedInput`,
+   * The bug this catches: `AskUserQuestion` is just another tool name to auto-mode (and was to
+   * the denylist before it), so without a special case it used to fall straight into the
+   * auto-allow path above — `{ behavior: 'allow' }`, no `updatedInput`,
    * no human ever shown the question — instead of blocking on a `question` event the way the
    * Agent SDK's "handle clarifying questions" guide expects.
    */
@@ -901,7 +934,7 @@ describe('connectAgentSdk', () => {
     expect(events.some((e) => e.kind === 'question-resolved')).toBe(true)
   })
 
-  test('canUseTool permission: sudo still prompts with no config, answerPermission unblocks it', async () => {
+  test('canUseTool permission: a flagged call prompts naming the statement, answerPermission unblocks it', async () => {
     const fake = fakeQueryFn()
     const events: { kind: string; id?: string; title?: string }[] = []
     const client = connectAgentSdk({
@@ -910,6 +943,7 @@ describe('connectAgentSdk', () => {
       writeFile: async () => ({ decision: 'allow', fileContent: '' }),
       requestPlanApproval: async () => ({ decision: 'allow' }),
       queryFn: fake.queryFn,
+      autoApprover: fakeApprover(FLAGGED).approver,
     })
 
     const started = client.start('sess-1')
@@ -920,7 +954,7 @@ describe('connectAgentSdk', () => {
     const canUseTool = fake.calls[0]?.options.canUseTool
     if (canUseTool === undefined) throw new Error('canUseTool was not wired into Options')
 
-    const resultPromise = canUseTool('Bash', { command: 'sudo rm -rf /tmp/x' }, {
+    const resultPromise = canUseTool('Bash', { command: 'git push' }, {
       signal: new AbortController().signal,
       toolUseID: 't1',
       requestId: 'r1',
@@ -935,10 +969,11 @@ describe('connectAgentSdk', () => {
     // Turnstile's own sentence wins over the bridge's vaguer one, and — the point of it — the
     // reader is shown the command they are being asked to approve.
     expect(permission).toMatchObject({
-      title: 'Run a command as root?',
-      subject: 'sudo rm -rf /tmp/x',
+      title: 'Run this command?',
+      subject: 'git push',
+      flagged: [{ text: 'Pushes to a remote', probability: 0.91 }],
     })
-    expect((permission as { reason?: string }).reason).toContain('root')
+    expect((permission as { reason?: string }).reason).toContain('Pushes to a remote')
 
     client.answerPermission(permission.id ?? '', 'allow')
     expect(await resultPromise).toEqual({ behavior: 'allow' })
@@ -954,6 +989,7 @@ describe('connectAgentSdk', () => {
       writeFile: async () => ({ decision: 'allow', fileContent: '' }),
       requestPlanApproval: async () => ({ decision: 'allow' }),
       queryFn: fake.queryFn,
+      autoApprover: fakeApprover(FLAGGED).approver,
     })
 
     const started = client.start('sess-1')
@@ -987,7 +1023,7 @@ describe('connectAgentSdk', () => {
     const permission = events.find((e) => e.kind === 'permission')
     if (permission === undefined) throw new Error('no permission event was emitted')
     expect(permission).toMatchObject({
-      title: 'Run a command outside the sandbox?',
+      title: 'Run this command?',
       subject: 'bun install --frozen-lockfile',
       description: 'Install dependencies',
     })
@@ -1009,6 +1045,7 @@ describe('connectAgentSdk', () => {
       writeFile: async () => ({ decision: 'allow', fileContent: '' }),
       requestPlanApproval: async () => ({ decision: 'allow' }),
       queryFn: fake.queryFn,
+      autoApprover: fakeApprover(FLAGGED).approver,
     })
 
     const started = client.start('sess-1')
@@ -1059,7 +1096,7 @@ describe('connectAgentSdk', () => {
     })
     expect(options?.sandbox).toMatchObject({
       enabled: true,
-      // Every Bash call must still reach canUseTool, or sudo and denyPatterns stop applying.
+      // Every Bash call must still reach canUseTool, or auto-mode stops applying to it.
       autoAllowBashIfSandboxed: false,
       filesystem: {
         allowWrite: ['/'],
@@ -1085,8 +1122,8 @@ describe('connectAgentSdk', () => {
     expect(fake.calls[0]?.options.sandbox).toBeUndefined()
   })
 
-  /** Leaving the sandbox would leave the protected directories with it. */
-  test('canUseTool: a Bash command asking to run unsandboxed is put to the human', async () => {
+  /** Auto-mode not set up is not auto-mode saying yes. */
+  test('canUseTool: with no auto-mode, every ordinary call is put to the human', async () => {
     const fake = fakeQueryFn()
     const events: { kind: string; id?: string }[] = []
     const client = connectAgentSdk({
@@ -1104,7 +1141,7 @@ describe('connectAgentSdk', () => {
     const canUseTool = fake.calls[0]?.options.canUseTool
     if (canUseTool === undefined) throw new Error('canUseTool was not wired into Options')
 
-    const result = canUseTool('Bash', { command: 'ls', dangerouslyDisableSandbox: true }, {
+    const result = canUseTool('Bash', { command: 'ls' }, {
       signal: new AbortController().signal,
       toolUseID: 't1',
       requestId: 'r1',
@@ -1112,6 +1149,7 @@ describe('connectAgentSdk', () => {
     for (let i = 0; i < 200 && !events.some((e) => e.kind === 'permission'); i++) await Bun.sleep(2)
     const permission = events.find((e) => e.kind === 'permission')
     if (permission === undefined) throw new Error('no permission event was emitted')
+    expect((permission as { reason?: string }).reason).toContain('not set up')
     client.answerPermission(permission.id ?? '', 'deny')
     expect(await result).toMatchObject({ behavior: 'deny' })
   })
@@ -1120,6 +1158,7 @@ describe('connectAgentSdk', () => {
   test('canUseTool: any call naming a reserved path is denied outright, the write tool included', async () => {
     const fake = fakeQueryFn()
     const events: { kind: string }[] = []
+    const { approver, asked } = fakeApprover()
     const client = connectAgentSdk({
       cwd: '/repo',
       onEvent: (event) => events.push(event as never),
@@ -1127,6 +1166,7 @@ describe('connectAgentSdk', () => {
       requestPlanApproval: async () => ({ decision: 'allow' }),
       queryFn: fake.queryFn,
       reservedPaths: ['.turnstile', '/shared/rules'],
+      autoApprover: approver,
     })
 
     const started = client.start('sess-1')
@@ -1153,19 +1193,22 @@ describe('connectAgentSdk', () => {
     }
     // Nobody was asked: there is no case for letting it through.
     expect(events.filter((event) => event.kind === 'permission')).toEqual([])
+    // Nor was auto-mode: no statement the user writes can let one through.
+    expect(asked).toEqual([])
     expect(await call('Read', { file_path: '/repo/src/a.ts' })).toEqual({ behavior: 'allow' })
   })
 
-  test('canUseTool: a configured deny pattern prompts for a Bash command that would otherwise auto-allow', async () => {
+  test('canUseTool: auto-mode that cannot answer puts the call to the human, saying why', async () => {
     const fake = fakeQueryFn()
-    const events: { kind: string; id?: string }[] = []
+    const events: { kind: string; id?: string; reason?: string }[] = []
     const client = connectAgentSdk({
       cwd: '/repo',
       onEvent: (event) => events.push(event as never),
       writeFile: async () => ({ decision: 'allow', fileContent: '' }),
       requestPlanApproval: async () => ({ decision: 'allow' }),
       queryFn: fake.queryFn,
-      denyPatterns: ['rm -rf'],
+      autoApprover: fakeApprover({ kind: 'unavailable', reason: 'TYPESAFE_API_KEY is not set' })
+        .approver,
     })
 
     const started = client.start('sess-1')
@@ -1176,7 +1219,7 @@ describe('connectAgentSdk', () => {
     const canUseTool = fake.calls[0]?.options.canUseTool
     if (canUseTool === undefined) throw new Error('canUseTool was not wired into Options')
 
-    const resultPromise = canUseTool('Bash', { command: 'rm -rf /tmp/x' }, {
+    const resultPromise = canUseTool('Bash', { command: 'ls' }, {
       signal: new AbortController().signal,
       toolUseID: 't1',
       requestId: 'r1',
@@ -1187,62 +1230,10 @@ describe('connectAgentSdk', () => {
     }
     const permission = events.find((e) => e.kind === 'permission')
     if (permission === undefined) throw new Error('no permission event was emitted')
+    expect(permission.reason).toContain('TYPESAFE_API_KEY is not set')
 
     client.answerPermission(permission.id ?? '', 'allow')
     expect(await resultPromise).toEqual({ behavior: 'allow' })
-  })
-
-  test('canUseTool: a configured deny pattern prompts for a matching MCP tool name', async () => {
-    const fake = fakeQueryFn()
-    const events: { kind: string; id?: string }[] = []
-    const client = connectAgentSdk({
-      cwd: '/repo',
-      onEvent: (event) => events.push(event as never),
-      writeFile: async () => ({ decision: 'allow', fileContent: '' }),
-      requestPlanApproval: async () => ({ decision: 'allow' }),
-      queryFn: fake.queryFn,
-      denyPatterns: ['^mcp__plugin_claude-mem_mcp-search__'],
-    })
-
-    const started = client.start('sess-1')
-    fake.push(initMessage('sess-1'))
-    await started
-
-    for (let i = 0; i < 200 && fake.calls.length === 0; i++) await Bun.sleep(2)
-    const canUseTool = fake.calls[0]?.options.canUseTool
-    if (canUseTool === undefined) throw new Error('canUseTool was not wired into Options')
-
-    const resultPromise = canUseTool('mcp__plugin_claude-mem_mcp-search__get_observations', {}, {
-      signal: new AbortController().signal,
-      toolUseID: 't1',
-      requestId: 'r1',
-    } as never)
-
-    for (let i = 0; i < 200 && events.filter((e) => e.kind === 'permission').length === 0; i++) {
-      await Bun.sleep(2)
-    }
-    const permission = events.find((e) => e.kind === 'permission')
-    if (permission === undefined) throw new Error('no permission event was emitted')
-
-    client.answerPermission(permission.id ?? '', 'deny')
-    const result = await resultPromise
-    if (result === null) throw new Error('expected a permission result')
-    expect(result.behavior).toBe('deny')
-  })
-
-  test('connectAgentSdk throws synchronously on an invalid configured deny pattern', () => {
-    const fake = fakeQueryFn()
-    expect(() =>
-      connectAgentSdk({
-        cwd: '/repo',
-        onEvent: () => {},
-        writeFile: async () => ({ decision: 'allow', fileContent: '' }),
-        requestPlanApproval: async () => ({ decision: 'allow' }),
-        queryFn: fake.queryFn,
-        denyPatterns: ['(unterminated'],
-      }),
-    ).toThrow(/toolPermissions\.denyPatterns/)
-    expect(fake.calls).toHaveLength(0)
   })
 
   /**
@@ -1463,6 +1454,7 @@ describe('connectAgentSdk', () => {
   test('canUseTool: a Bash write is put to the human in plan mode, and reading still is not', async () => {
     const fake = fakeQueryFn()
     const prompts: { title: string; reason: string | null }[] = []
+    const { approver, asked } = fakeApprover()
     const client = connectAgentSdk({
       cwd: '/repo',
       onEvent: (event) => {
@@ -1474,6 +1466,7 @@ describe('connectAgentSdk', () => {
       writeFile: async () => ({ decision: 'allow', fileContent: '' }),
       requestPlanApproval: async () => ({ decision: 'allow' }),
       queryFn: fake.queryFn,
+      autoApprover: approver,
     })
 
     const started = client.start('sess-1')
@@ -1500,8 +1493,10 @@ describe('connectAgentSdk', () => {
     expect(prompts).toHaveLength(1)
     expect(prompts[0]?.title).toBe('Let the agent do this while planning?')
     expect(prompts[0]?.reason).toContain('Plan mode is on')
+    // Plan mode settled that one; auto-mode was only asked about the read.
+    expect(asked.map((call) => call.input.command)).toEqual(['git log --oneline -5'])
 
-    // Out of plan mode the same command auto-approves again, as it always did.
+    // Out of plan mode the same command is auto-mode's to decide again.
     fake.push(statusMessage({ permissionMode: 'default' }))
     await Bun.sleep(2)
     expect(await call({ command: 'cat > src/thing.ts' }, 't3')).toEqual({ behavior: 'allow' })

@@ -34,16 +34,23 @@ was listening, and multi-strategy subprocess-path resolution for a compiled bina
 gaps and follow-ups" below for what this migration left unfinished.
 
 Read `README.md` for the product as a user sees it (the baseline, notes, the review,
-configuration, failure behavior). The CLI surface is `src/cli/main.ts`'s `app` (default),
-`init`, and `reset` only.
+configuration, failure behavior).
+
+**Turnstile is a macOS desktop app, built with Tauri (`desktop/`).** It is not a CLI and not a
+web app. Everything under `src/` compiles to one binary, `dist/turnstile`, which the desktop shell
+runs as a sidecar in the folder the user opened (`desktop/src-tauri/src/sidecar.rs`), loading
+the UI it serves into the app's window. `src/cli/main.ts` is that binary's entry point and takes
+no arguments; `cli/` is a historical name for the composition root. Don't add subcommands,
+flags or a browser-opening path. The browser is only for `bun run simulate`, a UI development
+tool.
 
 ## Known limitation: one repo, one session per process
 
 `runApp()` in `src/cli/app.ts` hardcodes `process.cwd()`, one `Session` and one server, so a
 running process serves exactly one repository. A multi-tab design — several repos, or several
 tabs on one repo, behind a single server with a browser-style tab bar — was prototyped
-separately and is **not part of this repository**. It reached green verification on the CLI and
-browser path but was never merged, because of one unresolved bug: in the desktop app, clicking
+separately and is **not part of this repository**. It reached green verification with its UI
+driven in a browser but was never merged, because of one unresolved bug: in the desktop app, clicking
 "Browse…" to pick a folder did nothing. A capability/origin fix was applied and confirmed
 compiled in — Tauri's default capability grants IPC only on the app's local origin, while that
 work keeps the window permanently on the sidecar's own served ("remote") origin — but a live
@@ -63,20 +70,24 @@ bun test -t "some test name"             # filter by test name (regex)
 bun run build                  # bun build --compile -> dist/turnstile, UI embedded
 ```
 
-There is no `bun run dev`/`start` script — run the CLI directly during development:
+Run the app during development through the desktop shell, from the repo root:
 
 ```bash
-bun src/cli/main.ts             # open the app (same as `turnstile`, against cwd)
+bun run desktop                 # tauri dev: rebuilds dist/turnstile, then opens the window
+bun run simulate                # the UI alone, in a browser, against a fake session (no agent)
 ```
 
 `OPENROUTER_API_KEY` (or whatever `openrouter.apiKeyEnv` in `.turnstile/config.json` names)
-must be set for answering a question about a selection (the model must support tool calling).
-The review does not use it: it is Claude Code, authenticated like the agent. The agent itself authenticates however the `claude` CLI
+is only for answering a question about a selection (the model must support tool calling).
+Nothing else uses OpenRouter: the review is Claude Code, authenticated like the agent, and
+auto-mode is TypeSafe. The agent itself authenticates however the `claude` CLI
 normally does (its own login, or `ANTHROPIC_API_KEY` in the environment) — Turnstile does not
 manage that.
+`TYPESAFE_API_KEY` (or whatever `typesafe.apiKeyEnv` names) is what auto-mode judges tool calls
+with. Without it every tool call prompts; nothing fails to start.
 `TURNSTILE_CLAUDE_CODE_EXECUTABLE` overrides which `claude` binary the SDK spawns, when its own
-resolution needs help (see `resolveExecutable.ts` below). `TURNSTILE_NO_BROWSER=1` suppresses
-auto-opening the UI tab.
+resolution needs help (see `resolveExecutable.ts` below); a packaged desktop build sets it to
+its bundled `claude`.
 
 No network access or API key is required to run the test suite — model calls sit behind the
 `Reviewer` and `Asker` ports and are faked in tests. `bun run simulate` fakes them too, so the
@@ -94,13 +105,14 @@ app/        session.ts, board.ts, review.ts — the pipeline, against ports only
    ↑
 adapters/   agent-sdk · git · model · web · fs — each may import core, never a sibling adapter
    ↑
-cli/        composition root (main.ts, app.ts) — the only place allowed to know every layer
+cli/        composition root (main.ts, app.ts) — the only place allowed to know every layer;
+            main.ts is the sidecar's entry point, not a command-line interface
 ```
 
 - `core` cannot import `node:fs`, use `Bun.*`, or `fetch` (checked by the same test file).
 - `app` cannot name a concrete adapter — it depends only on the interfaces in `core/ports.ts`.
 - `adapters/web/ui/*` (the React bundle) may only import from `core` or itself — never
-  server-side adapter code, since it ships into the browser.
+  server-side adapter code, since it ships into the app's webview.
 
 When adding a capability, add or extend a port in `core/ports.ts` first, implement it under
 `adapters/`, and wire it in `src/cli/app.ts` (the composition root) — don't reach around the
@@ -139,8 +151,8 @@ layers even for something that feels small.
   query on the same conversation: `resume` once the SDK has begun it, the same fresh
   `sessionId` if it never did. Before this, a dead process left the turn "thinking" forever.
 - **`src/adapters/agent-sdk/resolveExecutable.ts`** — locates the `claude` binary the SDK
-  should spawn, when its own optional-dependency resolution needs help. Interpreted
-  (`bun src/cli/main.ts`) needs no help (a real `node_modules` sits alongside it). Compiled
+  should spawn, when its own optional-dependency resolution needs help. Run from source
+  under Bun (as `bun run desktop` does before it compiles, and as tests do) needs no help (a real `node_modules` sits alongside it). Compiled
   (`bun build --compile`), `import.meta.url` resolves to a virtual `/$bunfs/...` path with
   nothing real beneath it, so `findUpward` walks up from `process.execPath` (the compiled
   binary's own real, on-disk location) looking for the platform package's `claude` binary in
@@ -287,7 +299,7 @@ layers even for something that feels small.
   focuses itself in an effect loses the cursor a moment later, and the reader ends up typing
   into the file. `useSelectionAsk`'s `handOff` blurs the content while handling the event that
   raised the selection, which is early enough; an effect is not, since a child's effects run
-  before its parent's. Known gap: auto-focus is unverified against a real foreground browser —
+  before its parent's. Known gap: auto-focus is unverified against a real foreground window —
   see below.
   - **The agent does not answer**, and that is the point. It cannot answer while it is mid-turn,
     which is exactly when you are reading its output and want to ask; and the question is not the
@@ -355,15 +367,16 @@ layers even for something that feels small.
   auto-approved — an agent restricted to planning could not use the write tool and could still
   write anywhere in the checkout with `cat >`, `sed -i` or a heredoc, silently. Found in the
   wild, not by a test: an agent reported routing around the refused write tool "via shell
-  instead". `core/toolSafety.ts`'s `isReadOnlyCall` is the fix, and it is an **allowlist** —
-  a deliberate inversion of this module's own denylist bias, because that bias assumes a review
-  will catch what slips through and plan mode's whole promise is that nothing happened at all.
+  instead". `core/toolSafety.ts`'s `isReadOnlyCall` is the fix, and it is an **allowlist**,
+  because auto-mode lets through whatever the user's statements don't describe, and plan mode's
+  whole promise is that nothing happened at all. A plan-restricted call goes to the human
+  without asking auto-mode.
   Declining is not denying: the call goes to the human with `plan-mode` as the
   `PermissionCause`, so installing a dependency mid-plan stays possible and stops being silent.
   The OS sandbox cannot do this job — `buildOptions` runs once per query, and the mode changes
   inside a live one, including from inside `canUseTool` itself when a plan is approved.
   The classifier is text matching over shell, not parsing, and can be fooled by an operator
-  inside quotes exactly as `containsSudoInvocation` can. It is a gate in front of a human, not a
+  inside quotes. It is a gate in front of a human, not a
   sandbox.
   **`buildPlanTool` is why the plan file no longer costs a prompt.** `Edit`/`Write` are
   disallowed outright and `propose_edit` is scoped to the repository, so the one file the
@@ -428,13 +441,15 @@ layers even for something that feels small.
      deny rules for Claude Code's file tools.
   2. **Claude Code's OS sandbox**: `filesystem.denyRead`/`denyWrite` on those dirs, and
      `allowWrite: ['/']` so nothing else is confined. `autoAllowBashIfSandboxed: false` keeps
-     every Bash call going through `canUseTool`, so sudo and `denyPatterns` still apply.
+     every Bash call going through `canUseTool`, so auto-mode still applies.
      `failIfUnavailable: false`.
   3. **`canUseTool`** first refuses any call whose serialized input names a reserved path
      (`core/toolSafety.ts`'s `reservedPathIn`). This is the only layer that covers
      Turnstile's in-process write tool.
 
-  `canUseTool` also routes any Bash call with `dangerouslyDisableSandbox` to the human. Why all
+  A Bash call with `dangerouslyDisableSandbox` goes to auto-mode like any other, with
+  `runs_outside_sandbox` in what the judge is shown and a suggested statement for it — so leaving
+  the sandbox is prompted only while the user keeps that statement. Why all
   three, verified live: the deny rules alone stopped `Read` and `cat`, but not `grep -r` from a
   parent directory or `python open()`; the sandbox stopped all of them. Network still works: each
   host comes through `canUseTool` as `SandboxNetworkAccess`.
@@ -451,25 +466,43 @@ layers even for something that feels small.
   (docs, formatting, lockfiles, generated code, comment-only, mechanical renames); config lets a
   repo force `alwaysReview`/`neverReview`/`specPaths` globs. A skipped chunk still shows on the
   board, with the reason in place of an analysis.
-- **`src/core/toolSafety.ts`** — `isAutoApprovedTool`, checked by `agent-sdk/client.ts`'s
-  `canUseTool` before it ever raises a human prompt. Supplying `canUseTool` at all opts out of
-  Claude Code's own built-in read-only detection (a bare CLI never prompts for `git status` or
-  `cat`) — the SDK routes every non-disallowed tool call through the consumer's callback
-  instead, with no fallback to any built-in list — so without this, Turnstile would prompt for
-  everything, always. It's a **denylist**, not an allowlist: every tool call — every MCP tool,
-  `WebFetch`, `Task`, any Bash command — auto-approves by default. Only two things still gate:
-  a tiny hardcoded floor (`sudo`, detected across every `&&`/`||`/`;`/`|`-separated stage via
-  `containsSudoInvocation`, which survives with zero config) and whatever the user adds to
-  `toolPermissions.denyPatterns` in `.turnstile/config.json`. A configured deny pattern is a
-  regex matched against the full Bash command text when the tool is `Bash`, and against the
-  tool name for everything else — so `rm -rf` denies that shape of command while leaving Bash
-  otherwise open, and `^mcp__some-server__` denies a whole MCP server by name.
-  `compileDenyPatterns` compiles the config strings once per connection and throws (fails
-  closed) on an invalid one rather than silently dropping it — a silently-ignored deny pattern
-  is a security-relevant hole, not a cosmetic bug. This is a deliberate bias flip from the
-  allowlist it replaced: that one erred toward an extra prompt over a hole; this one errs
-  toward auto-approving over interrupting, since the user explicitly chose to trade that safety
-  margin for fewer prompts, denying only what they name.
+- **Auto-mode** — whether a tool call runs without asking, judged against the user's own
+  statements. It replaced `isAutoApprovedTool`, a regex denylist (`toolPermissions.denyPatterns`)
+  plus a hardcoded `sudo` floor. Supplying `canUseTool` at all opts out of Claude Code's own
+  read-only detection, so something has to let ordinary calls through, or Turnstile would prompt
+  for everything.
+  - **`core/autoMode.ts`** (pure): `AutoModePolicy` (`rules`, `threshold`, default 0.3),
+    `SEED_RULES` (the setup screen's suggestions — `sudo` and the sandbox escape among them, since
+    they used to be hardcoded), `callState` (the one JSON state every question is asked over: the
+    call, and the repository root and home directory), `questionFor` (one Noul per statement,
+    asking what the call would *do*), and `decide`: flag if **any** statement is at or above the
+    threshold. A missing or out-of-range answer is `unavailable`, never an allow.
+  - **`app/autoMode.ts`** (`createAutoMode`): holds the policy, asks the `CallJudge` within
+    `typesafe.timeoutMs` (signalled *and* raced, so a judge that ignores its signal still can't
+    hold the agent), turns every throw into `unavailable`, and memoizes `allow`/`flag` by
+    `[toolName, input]` — cleared on save, never caching a failure. `trial` is the setup screen's
+    dry run against an unsaved policy.
+  - **`adapters/typesafe/judge.ts`**: one `systemOne` request per call, questions keyed by rule
+    id. Built per call in `cli/app.ts`, like the asker, so a missing key is one `unavailable`
+    verdict rather than a failed start.
+  - **`adapters/fs/autoMode.ts`**: `~/.turnstile/auto-mode.json`, per user. It lives in a
+    `protectedDirs` entry, so the agent can't rewrite the rules it's judged by. An unreadable
+    file is no policy, which means every call prompts.
+  - **`canUseTool`** order: reserved path (deny) → plan tool/write tool/`ExitPlanMode`/
+    `AskUserQuestion` (special-cased) → plan mode (a call that does more than read goes to the
+    human, auto-mode not asked) → `autoApprover.verdict` (only `allow` runs unasked). No
+    `autoApprover` means auto-mode is off.
+  - **UI**: `AutoModeSetup.tsx` opens by itself when no policy exists (once per page load) and
+    from the top bar's **Auto-mode** button. `GET`/`PUT /auto-mode`, `POST /auto-mode/trial`.
+    Legacy `denyPatterns` (`loadLegacyDenyPatterns`, read off the raw config files since the
+    schema dropped the key) are offered as statements to reword, never migrated silently.
+  - **Unverified live**: no run against the real TypeSafe API has been made yet. The request
+    shape is tested against the SDK with an injected `fetch`, and the UI through `simulate`
+    (whose judge matches words). Worth measuring: added latency per tool call, and whether the
+    seed statements score the way they read.
+- **`src/core/toolSafety.ts`** — what sits in front of auto-mode and no statement can change:
+  `reservedPathIn` (Turnstile's own state is refused outright) and `isReadOnlyCall` (plan mode's
+  allowlist). Text matching over tool input, not sandboxes.
 - **`src/core/permissionPrompt.ts`** — `describePermissionRequest`, which composes what the
   human is actually shown for a call that could not be auto-approved: the question, the command
   (or URL/path) verbatim, the agent's own description, and *why* it is being asked. The prompt
@@ -477,14 +510,10 @@ layers even for something that feels small.
   `title` undefined for every call Turnstile gates — verified live: `title` was null every time
   while `displayName`/`description`/`blockedPath`/`decisionReason` were populated. So every
   prompt read a bare **"Allow Bash?"** with the command invisible, asking a reader to approve
-  something they could not see. The sentence is composed here instead, and only falls back to
-  the bridge's `title` for a `denyPatterns` match, where the user's own rule is the cause and we
-  have nothing more specific to say. Sudo is reported via `toolSafety.ts`'s own
-  `containsSudoInvocation` rather than a second detector, so the sentence can't name a different
-  cause than the code that actually refused the call.
-  **In practice the only thing that reaches this is a sandbox escape** (`dangerouslyDisableSandbox`
-  on a Bash call): with no `denyPatterns` configured, that and `sudo` are the only paths past
-  `isAutoApprovedTool`. It exists because of the OS sandbox; before that, nothing reached it.
+  something they could not see. The sentence is composed here instead. The cause comes from what
+  `canUseTool` passes in: `plan-mode`, `flagged` (auto-mode's verdict, whose fired statements
+  also go out as the prompt's `flagged` list with their probabilities), `auto-mode-unavailable`
+  (with the judge's reason) or `auto-mode-off`.
 - **`src/core/livechunks.ts`** — `liveChunks`: derives what the sidebar renders
   (`pending`/`analyzing`/`ready`/`skipped`) whole, from the chunks, the skips and a `ReviewView`
   (is the file under review, why did its last review fail, its findings if its review is
@@ -558,7 +587,7 @@ layers even for something that feels small.
   (`ConversationPanel.tsx`, resizable by dragging its top edge, hideable to a thin bar along the
   bottom that still shows status and the queue; its compose box also sends notes). It starts at
   a third of the height; there is no full-screen mode. Hidden/shown
-  panel state, the conversation's height (as a fraction) and the open tabs are remembered per browser in `localStorage` — which in
+  panel state, the conversation's height (as a fraction) and the open tabs are remembered in the webview's `localStorage` — which in
   practice means **per run, not across restarts**: `serveApp` binds `port: options.port ?? 0`
   and `cli/app.ts` passes no port, so every launch is a fresh ephemeral port and therefore a
   fresh origin. Deliberate, not a bug to fix in passing: pin the port, or move the state into
@@ -567,7 +596,7 @@ layers even for something that feels small.
   what was asked.
   Also serves the read-only file explorer's two endpoints, `GET /files` (the flat path list)
   and `GET /files/content?path=...` (one file's text), backed by the `ProjectTree` port below.
-  They serve the repository once a session has opened, and the launch directory before that.
+  They serve the repository once a session has opened, and the opened folder before that.
   There is no `/mcp` route any more — the write tool lives entirely in-process now, inside
   `adapters/agent-sdk/client.ts` (`buildWriteTool`), with nothing to mount over HTTP.
 - **`src/adapters/fs/projectTree.ts`** — the `ProjectTree` port's adapter: every non-ignored
@@ -577,7 +606,7 @@ layers even for something that feels small.
   from `EditTarget` — one is the narrow read/write surface the agent's write tool uses, the
   other a read-only view of the whole tree, and the two ports should stay easy to tell apart.
 - **`src/adapters/fs/safePath.ts`** — `resolveInside`/`readInside`, the traversal guard every
-  filesystem-touching adapter shares (`ProjectTree.read` today) so a browser-supplied path can
+  filesystem-touching adapter shares (`ProjectTree.read` today) so a path supplied by the page can
   never resolve to somewhere outside the project root. Joins the path against root and checks
   the result stays prefixed by it (catches `..` after normalization), then, before reading,
   resolves the real path (following any symlinks) and re-checks that too — closing the gap a
@@ -591,7 +620,7 @@ layers even for something that feels small.
 ### Change detection: git, in the user's checkout
 
 Change detection runs on git. For a stretch it ran on a filesystem-scanning
-"watcher" that re-implemented git badly; that was deleted. The repository Turnstile was launched in
+"watcher" that re-implemented git badly; that was deleted. The folder the desktop app opened
 is the one and only root, and a directory that is not a git repository opens no session at all
 (`SessionState.tracking`), with the UI offering to initialize one.
 
@@ -601,7 +630,7 @@ on close if unused). That isolation only existed for the review gate; once the g
 more than it gave, and it was removed. Leftover worktrees and branches from it are left alone.
 
 Things this design means, worth knowing before changing it:
-- The agent works **in the user's checkout**, in the directory Turnstile was launched from. Its
+- The agent works **in the user's checkout**, the folder the desktop app opened. Its
   edits land there directly; Turnstile creates no branch and never commits.
 - **The baseline is recorded at the first prompt**, as a commit (on no branch, parented on HEAD
   when there is one) at `refs/turnstile/baselines/<sessionId>`, capturing the checkout through a
@@ -618,8 +647,9 @@ Things this design means, worth knowing before changing it:
 - Past conversations are listed through `AgentHistory` (the SDK's session files for the launch
   directory), filtered to the ids that have a baseline ref — a plain `claude` session run in the
   same directory has nothing to measure a board from.
-- `turnstile reset` forgets every note and hidden file (and deletes old review-era state files). It leaves the
-  baseline refs, which are what make a session resumable.
+- There is no reset command. Notes, hidden files and stored reviews live in
+  `.turnstile/annotations.json`, `hidden.json` and `findings.json`; deleting those files forgets
+  them. The baseline refs are what make a session resumable.
 
 ### The board is cumulative and survives restarts
 
@@ -634,7 +664,7 @@ time.
 `session.start()` checks the project is trackable (`Repository.status`; anything but `'git'` stops
 here, recorded in `SessionState.tracking`) and mints a session id — nothing else. The first prompt
 then opens the session (`Repository.open`, which records its baseline), activates the repository
-as the one root, and opens an agent connection running in the launch directory (one long-lived
+as the one root, and opens an agent connection running in the opened folder (one long-lived
 streaming-input `query()`, resolving immediately with that id — see the agent-sdk client above).
 `newSession`/`resumeSession` leave the live session, then open the other conversation — lazily
 for a new session, immediately for a resume. `session.send(text)` loops: run one `turn()`, then
@@ -667,8 +697,8 @@ board, starts the review if the turn changed the tree, and goes idle.
 - These adapter-level fakes are necessarily a simplification of the real SDK's timing, and two
   real bugs in this adapter were found only by running it live against a real session, not by
   any test here — see "Known gaps and follow-ups" below. Treat a green `client.test.ts` as
-  necessary, not sufficient, for a change to this adapter; a live smoke test (`bun src/cli/main.ts`
-  against a scratch repo) is worth doing before trusting a nontrivial change to it.
+  necessary, not sufficient, for a change to this adapter; a live smoke test (`bun run desktop`,
+  opening a scratch repo) is worth doing before trusting a nontrivial change to it.
 
 ## Known gaps and follow-ups (ACP → Claude Agent SDK migration)
 
@@ -749,4 +779,4 @@ of the following just works:
   uncommitted changes" when dirty), so you can see which version is starting.
 - **A HEAD-tree file explorer** — showing the repository's files before a session opens — was
   prototyped separately and is not in this repository; the explorer here falls back to the
-  launch directory instead.
+  opened folder instead.

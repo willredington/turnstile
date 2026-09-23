@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { homedir } from 'node:os'
 import { serveApp } from '../../../src/adapters/web/server.ts'
+import { createAutoMode } from '../../../src/app/autoMode.ts'
 import { PLAN_PATH } from '../../../src/core/annotations.ts'
+import type { AutoModePolicy } from '../../../src/core/autoMode.ts'
 import type {
   Asker,
   AskRequest,
@@ -655,6 +657,118 @@ describe('/review', () => {
       const response = await fetch(`${server.url}review`, { method: 'POST' })
       expect(response.status).toBe(200)
       expect(asked).toBe(1)
+    } finally {
+      server.stop()
+    }
+  })
+})
+
+describe('/auto-mode', () => {
+  const policy: AutoModePolicy = {
+    version: 1,
+    threshold: 0.3,
+    rules: [{ id: 'push', text: 'Pushes to a remote' }],
+  }
+
+  const send = (url: string, route: string, payload: unknown) =>
+    fetch(`${url}${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+  async function serveWithAutoMode() {
+    let saved: AutoModePolicy | null = null
+    const autoMode = createAutoMode({
+      store: {
+        load: async () => saved,
+        save: async (next) => {
+          saved = next
+        },
+      },
+      judge: {
+        judge: async (state, rules) =>
+          new Map(
+            rules.map((rule) => [rule.id, String(state.call.command).includes('push') ? 0.9 : 0.1]),
+          ),
+      },
+      where: { cwd: '/repo', home: '/home/me' },
+      timeoutMs: 1_000,
+    })
+    await autoMode.load()
+    const server = serveApp({
+      session: fakeSession({ state: () => SOME_STATE }),
+      projectTree: fakeProjectTree,
+      asker: fakeAsker,
+      reader: fakeReader,
+      roots: ONE_ROOT,
+      cwd: '/repo',
+      port: 0,
+      autoMode,
+    })
+    return { server, saved: () => saved }
+  }
+
+  test('starts with no policy and offers the seeds', async () => {
+    const { server } = await serveWithAutoMode()
+    try {
+      const settings = await (await fetch(`${server.url}auto-mode`)).json()
+      expect(settings.policy).toBeNull()
+      expect(settings.seeds.length).toBeGreaterThan(0)
+    } finally {
+      server.stop()
+    }
+  })
+
+  test('saves a valid policy and refuses anything else', async () => {
+    const { server, saved } = await serveWithAutoMode()
+    try {
+      const put = (body: unknown) =>
+        fetch(`${server.url}auto-mode`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+      expect((await put({ ...policy, threshold: 7 })).status).toBe(400)
+      expect(saved()).toBeNull()
+
+      const response = await put(policy)
+      expect(response.status).toBe(200)
+      expect((await response.json()).policy).toEqual(policy)
+      expect(saved()).toEqual(policy)
+    } finally {
+      server.stop()
+    }
+  })
+
+  test('a trial judges a command against the statements sent, saved or not', async () => {
+    const { server, saved } = await serveWithAutoMode()
+    try {
+      const trial = await (
+        await send(server.url, 'auto-mode/trial', { command: 'git push', policy })
+      ).json()
+      expect(trial.verdict.kind).toBe('flag')
+      expect(trial.probabilities).toEqual([{ id: 'push', probability: 0.9 }])
+      expect(saved()).toBeNull()
+
+      expect((await send(server.url, 'auto-mode/trial', { command: '', policy })).status).toBe(400)
+    } finally {
+      server.stop()
+    }
+  })
+
+  test('without auto-mode, the routes are not there', async () => {
+    const server = serveApp({
+      session: fakeSession({ state: () => SOME_STATE }),
+      projectTree: fakeProjectTree,
+      asker: fakeAsker,
+      reader: fakeReader,
+      roots: ONE_ROOT,
+      cwd: '/repo',
+      port: 0,
+    })
+    try {
+      expect((await fetch(`${server.url}auto-mode`)).status).toBe(404)
     } finally {
       server.stop()
     }

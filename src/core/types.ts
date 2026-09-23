@@ -7,6 +7,7 @@
  * depends downward onto this file instead.
  */
 
+import type { FlaggedStatement } from './permissionPrompt.ts'
 import type { Queued } from './queue.ts'
 
 export type { Queued }
@@ -261,6 +262,8 @@ export type AgentEvent =
       description: string | null
       /** Why this call needed a human rather than auto-approving. */
       reason: string | null
+      /** The user's auto-mode statements it ran into, most likely first. */
+      flagged?: FlaggedStatement[]
       options: PermissionOption[]
     }
   | { kind: 'permission-resolved'; id: string }
@@ -370,6 +373,9 @@ export type PendingPermission = {
   subject: string | null
   description: string | null
   reason: string | null
+  /** The user's auto-mode statements it ran into, most likely first. Absent or empty when it
+   *  was not flagged (plan mode, or auto-mode off or unavailable). */
+  flagged?: FlaggedStatement[]
   options: PermissionOption[]
 }
 

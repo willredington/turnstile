@@ -109,7 +109,6 @@ pub async fn start(app: AppHandle, folder: String) -> Result<(), String> {
         .sidecar("turnstile")
         .map_err(|e| e.to_string())?
         .current_dir(&folder)
-        .env("TURNSTILE_NO_BROWSER", "1")
         // `kill_current()` on `RunEvent::Exit` only covers a graceful quit; this makes the
         // sidecar exit on its own when this process dies any other way (see parentWatch.ts).
         .env("TURNSTILE_EXIT_WITH_PARENT", "1");

@@ -3,7 +3,8 @@ import { join } from 'node:path'
 import { createAgentHistory, createAgentSdkClient } from '../adapters/agent-sdk/client.ts'
 import { createAgentSdkReviewer } from '../adapters/agent-sdk/reviewer.ts'
 import { createFileAnnotationStore } from '../adapters/fs/annotations.ts'
-import { loadConfig } from '../adapters/fs/config.ts'
+import { createFileAutoModeStore } from '../adapters/fs/autoMode.ts'
+import { loadConfig, loadLegacyDenyPatterns } from '../adapters/fs/config.ts'
 import { createFileEditTarget } from '../adapters/fs/editTarget.ts'
 import { createFileFindingStore } from '../adapters/fs/findings.ts'
 import { createFileHiddenStore } from '../adapters/fs/hidden.ts'
@@ -14,10 +15,13 @@ import { createGitRootRegistry } from '../adapters/git/rootRegistry.ts'
 import { createModelAsker } from '../adapters/model/asker.ts'
 import { createModel, readApiKey } from '../adapters/model/client.ts'
 import { createOtelTelemetry } from '../adapters/otel/telemetry.ts'
+import { createTypeSafeJudge } from '../adapters/typesafe/judge.ts'
 import { serveApp } from '../adapters/web/server.ts'
+import { createAutoMode } from '../app/autoMode.ts'
 import { createSession } from '../app/session.ts'
+import { legacyRules } from '../core/autoMode.ts'
 import { STATE_DIR } from '../core/config.ts'
-import type { Asker, Session, Telemetry } from '../core/ports.ts'
+import type { Asker, CallJudge, Session, Telemetry } from '../core/ports.ts'
 import { agentTelemetryEnv, noopTelemetry } from '../core/telemetry.ts'
 import { watchParent } from './parentWatch.ts'
 
@@ -27,16 +31,6 @@ import { watchParent } from './parentWatch.ts'
  * The only module allowed to know about every layer at once: it builds the adapters, hands
  * them to the session as ports, and puts a server in front.
  */
-
-function openBrowser(url: string): void {
-  if (process.env.TURNSTILE_NO_BROWSER === '1') return
-  const command = process.platform === 'darwin' ? 'open' : 'xdg-open'
-  try {
-    Bun.spawn([command, url], { stdout: 'ignore', stderr: 'ignore' }).unref()
-  } catch {
-    // The URL is printed either way, which is the fallback.
-  }
-}
 
 export async function runApp(): Promise<void> {
   const cwd = process.cwd()
@@ -91,6 +85,32 @@ export async function runApp(): Promise<void> {
       ).ask(input),
   }
 
+  /**
+   * Auto-mode: whether a tool call runs without asking, judged against the user's own statements
+   * (`~/.turnstile/auto-mode.json`, written by the setup screen). The judge is built per call,
+   * like the asker, so a missing key makes that call ask the human rather than failing the start.
+   * Every failure asks the human; see `app/autoMode.ts`.
+   */
+  const judge: CallJudge = {
+    judge: (state, rules, signal) => {
+      const apiKey = process.env[config.typesafe.apiKeyEnv]?.trim() ?? ''
+      if (apiKey === '') throw new Error(`${config.typesafe.apiKeyEnv} is not set`)
+      return createTypeSafeJudge({
+        apiKey,
+        model: config.typesafe.model,
+        timeoutMs: config.typesafe.timeoutMs,
+      }).judge(state, rules, signal)
+    },
+  }
+  const autoMode = createAutoMode({
+    store: createFileAutoModeStore(homedir()),
+    judge,
+    where: { cwd, home: homedir() },
+    timeoutMs: config.typesafe.timeoutMs,
+    migrated: legacyRules(await loadLegacyDenyPatterns(cwd)),
+  })
+  await autoMode.load()
+
   // Turnstile's own state, kept out of reach of the coding agent and the reviewer alike.
   const protectedDirs = [join(homedir(), STATE_DIR), join(cwd, STATE_DIR)]
   const reservedPaths = [STATE_DIR, ...protectedDirs]
@@ -116,7 +136,7 @@ export async function runApp(): Promise<void> {
         onEvent,
         writeFile,
         requestPlanApproval,
-        denyPatterns: config.toolPermissions.denyPatterns,
+        autoApprover: autoMode,
         // Turnstile's own state is not the agent's to read or change. `protectedDirs` is
         // enforced by Claude Code's deny rules and OS sandbox; `reservedPaths` also refuses
         // Turnstile's own write tool, which runs in this process, outside both.
@@ -140,7 +160,16 @@ export async function runApp(): Promise<void> {
     onChange: (state) => broadcast(state as never),
   })
 
-  const server = serveApp({ session, projectTree, asker, reader, roots, cwd, telemetry })
+  const server = serveApp({
+    session,
+    projectTree,
+    asker,
+    reader,
+    roots,
+    cwd,
+    telemetry,
+    autoMode,
+  })
   broadcast = server.broadcast as (state: never) => void
 
   await session.start()
@@ -161,7 +190,6 @@ export async function runApp(): Promise<void> {
         'Initialize one from the app, or run `git init`.\n',
     )
   }
-  openBrowser(server.url)
 
   // Async: `roots.teardown()` drops whatever shouldn't outlive the process. Guarded against
   // firing twice — a second signal arriving while the first shutdown is still awaiting teardown

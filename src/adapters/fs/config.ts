@@ -10,7 +10,7 @@ import {
 
 const CONFIG_FILE = 'config.json'
 
-export function configPath(cwd: string): string {
+function configPath(cwd: string): string {
   return join(cwd, STATE_DIR, CONFIG_FILE)
 }
 
@@ -67,4 +67,27 @@ export async function loadConfig(
     throw new Error(`Invalid config at ${label}:\n${detail}`)
   }
   return result.data
+}
+
+/**
+ * `toolPermissions.denyPatterns` from before auto-mode replaced them, from either config layer
+ * (the repo's winning, as it did), so the setup screen can offer them to be reworded. The schema
+ * no longer knows the key, so it is read off the raw files. Anything unreadable is none.
+ */
+export async function loadLegacyDenyPatterns(
+  cwd: string,
+  homeDir: string = homedir(),
+): Promise<string[]> {
+  const patternsIn = async (path: string): Promise<string[] | null> => {
+    try {
+      const raw = (await readRawConfig(path)) as
+        | { toolPermissions?: { denyPatterns?: unknown } }
+        | undefined
+      const patterns = raw?.toolPermissions?.denyPatterns
+      return Array.isArray(patterns) ? patterns.filter((p) => typeof p === 'string') : null
+    } catch {
+      return null
+    }
+  }
+  return (await patternsIn(configPath(cwd))) ?? (await patternsIn(userConfigPath(homeDir))) ?? []
 }

@@ -72,7 +72,25 @@ export function PermissionOverlay({ permissions }: { permissions: PendingPermiss
           <p className="permission-description">{current.description}</p>
         )}
 
-        {current.reason !== null && <p className="permission-reason">{current.reason}</p>}
+        {current.flagged !== undefined && current.flagged.length > 0 ? (
+          <>
+            <p className="permission-reason permission-flagged-lead">
+              Auto-mode flagged this. It looks like it:
+            </p>
+            <ul className="permission-flagged">
+              {current.flagged.map((statement) => (
+                <li key={statement.text} className="permission-flagged-item">
+                  <span>{statement.text}</span>
+                  <span className="permission-flagged-score">
+                    {Math.round(statement.probability * 100)}%
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          current.reason !== null && <p className="permission-reason">{current.reason}</p>
+        )}
 
         <div className="permission-options">
           {current.options.map((option, index) => (

@@ -3,6 +3,10 @@ import { z } from 'zod'
 /**
  * Turnstile's configuration. This is domain data, not infrastructure — the risk bar and the
  * review both read it — so the schema lives in core and only *loading* it is an adapter.
+ *
+ * Three services, three sections: the review is Claude Code (`review`), answering a question
+ * about code is a model over OpenRouter (`ask`, `openrouter`), and auto-mode's judge is TypeSafe
+ * (`typesafe`). API keys are only ever read from the environment, named by `apiKeyEnv`.
  */
 
 const ProviderPrefsSchema = z.object({
@@ -14,24 +18,21 @@ const ProviderPrefsSchema = z.object({
 })
 
 const ModelConfigSchema = z.object({
-  /** Priority-ordered fallback array. You are billed for whichever model actually serves. */
+  /** OpenRouter model ids, a priority-ordered fallback list. You are billed for whichever serves. */
   models: z.array(z.string()).min(1, 'model.models needs at least one entry'),
   provider: ProviderPrefsSchema.optional(),
-  /**
-   * Determinism matters more than variety: the same delta should produce the same
-   * adjudication, or the human cannot tell a new challenge from a resampled one.
-   */
+  /** Low by default: the same question about the same code should get the same answer. */
   temperature: z.number().min(0).max(2).default(0),
 })
 export type ModelConfig = z.infer<typeof ModelConfigSchema>
 
 const RiskBarConfigSchema = z.object({
-  /** Globs whose changes are always risk-checked, outranking every heuristic and neverReview. */
+  /** Globs whose changes are always reviewed, outranking every skip rule and neverReview. */
   alwaysReview: z.array(z.string()).default([]),
-  /** Globs never risk-checked. Generated code and vendored trees live here. */
+  /** Globs never reviewed, added to the built-in generated/vendored list rather than replacing it. */
   neverReview: z.array(z.string()).default([]),
   /**
-   * Globs risk-checked the same way `alwaysReview` is, for plan/spec documents the doc-path
+   * Globs reviewed the same way `alwaysReview` is, for plan/spec documents the doc-path
    * heuristic would otherwise skip.
    */
   specPaths: z.array(z.string()).default([]),
@@ -66,28 +67,16 @@ const AskConfigSchema = z.object({
 })
 export type AskConfig = z.infer<typeof AskConfigSchema>
 
-const ToolPermissionsConfigSchema = z.object({
+const TypeSafeConfigSchema = z.object({
+  /** The environment variable holding the TypeSafe API key auto-mode judges calls with. */
+  apiKeyEnv: z.string().min(1).default('TYPESAFE_API_KEY'),
+  /** The System One model that answers auto-mode's questions. */
+  model: z.string().min(1).default('jev-latest'),
   /**
-   * Regexes that deny an otherwise-auto-approved tool call instead of prompting a human. For
-   * `Bash`, matched against the full command text (`input.command`); for every other tool,
-   * matched against the tool name — e.g. `^WebFetch$` denies WebFetch outright, or
-   * `^mcp__some-server__` denies a whole MCP server.
+   * One verdict's whole budget. The agent waits on it before every tool call, so it is short;
+   * a verdict that misses it asks the human rather than letting the call through.
    */
-  denyPatterns: z
-    .array(
-      z.string().refine(
-        (pattern) => {
-          try {
-            new RegExp(pattern)
-            return true
-          } catch {
-            return false
-          }
-        },
-        { message: 'must be a valid regular expression' },
-      ),
-    )
-    .default([]),
+  timeoutMs: z.number().int().min(500).default(5_000),
 })
 
 /** See `ConfigSchema.untrackedExcludes`. */
@@ -137,7 +126,12 @@ export const ConfigSchema = z.object({
     neverReview: [],
     specPaths: [],
   }),
-  toolPermissions: ToolPermissionsConfigSchema.default({ denyPatterns: [] }),
+  /** Auto-mode's judge. The statements it judges against are the user's own, set up in the app. */
+  typesafe: TypeSafeConfigSchema.default({
+    apiKeyEnv: 'TYPESAFE_API_KEY',
+    model: 'jev-latest',
+    timeoutMs: 5_000,
+  }),
   /**
    * Gitignore-style patterns for untracked files that never reach the board, on top of the
    * repository's own ignore rules. Build output is the case this exists for: an agent that
@@ -146,6 +140,7 @@ export const ConfigSchema = z.object({
    * already tracks are unaffected. Replaces the default list outright when set.
    */
   untrackedExcludes: z.array(z.string()).default([...DEFAULT_UNTRACKED_EXCLUDES]),
+  /** Only "ask about code" uses OpenRouter; the review and auto-mode never do. */
   openrouter: z
     .object({ apiKeyEnv: z.string().min(1).default('OPENROUTER_API_KEY') })
     .default({ apiKeyEnv: 'OPENROUTER_API_KEY' }),

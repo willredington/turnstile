@@ -29,10 +29,8 @@ function resolveModel(config: ModelConfig): ResolvedModel {
 }
 
 /**
- * Resolves one `ModelConfig` into one `LanguageModel` instance. Generic on purpose: the
- * author's model, the risk check's model, and the risk advisor's model are three separate
- * configs, each resolved through this same function, so each can be tuned (and swapped)
- * independently rather than being locked to whatever the author is using.
+ * Resolves a `ModelConfig` into a `LanguageModel` over OpenRouter. Only the asker uses one: the
+ * review runs on Claude Code and auto-mode on TypeSafe.
  */
 export function createModel(apiKey: string, config: ModelConfig): LanguageModel {
   const openrouter = createOpenRouter({ apiKey })
@@ -44,7 +42,7 @@ export function readApiKey(env: NodeJS.ProcessEnv, variable: string): string {
   const key = env[variable]
   if (key === undefined || key.trim() === '') {
     throw new Error(
-      `${variable} is not set. Turnstile needs an OpenRouter key to review a file or answer a question about one.`,
+      `${variable} is not set. Turnstile needs an OpenRouter key to answer a question about code.`,
     )
   }
   return key

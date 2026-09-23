@@ -161,6 +161,8 @@ export function TopBar({
   thinkingLevel,
   contextUsed,
   contextSize,
+  autoMode,
+  onAutoMode,
 }: {
   activity: Activity
   diff: DiffView | null
@@ -178,6 +180,10 @@ export function TopBar({
   contextUsed: number | null
   /** The agent's total context window size in tokens. */
   contextSize: number | null
+  /** Whether auto-mode is set up; null when the server offers none. */
+  autoMode: 'on' | 'off' | null
+  /** Opens the auto-mode setup screen. */
+  onAutoMode: () => void
 }) {
   const added = diff?.files.reduce((sum, file) => sum + file.patch.addedCount, 0) ?? 0
   const removed = diff?.files.reduce((sum, file) => sum + file.patch.removedCount, 0) ?? 0
@@ -228,6 +234,20 @@ export function TopBar({
               </span>
             )}
           </div>
+        )}
+        {autoMode !== null && (
+          <button
+            type="button"
+            className={`btn btn-secondary${autoMode === 'off' ? ' top-bar-auto-mode-off' : ''}`}
+            title={
+              autoMode === 'on'
+                ? 'Change when the agent asks you first'
+                : 'Auto-mode is not set up, so every tool call asks you'
+            }
+            onClick={onAutoMode}
+          >
+            {autoMode === 'on' ? 'Auto-mode' : 'Set up auto-mode'}
+          </button>
         )}
         <SessionSwitcher
           currentSessionId={sessionId}

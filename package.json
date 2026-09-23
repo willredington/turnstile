@@ -3,9 +3,6 @@
   "version": "1",
   "type": "module",
   "private": true,
-  "bin": {
-    "turnstile": "./src/cli/main.ts"
-  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
@@ -48,6 +45,7 @@
     "@opentelemetry/sdk-metrics": "^2.11.0",
     "@opentelemetry/sdk-trace-node": "^2.11.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
+    "@typesafe-ai/sdk": "^0.6.0",
     "ai": "^7.0.29",
     "dompurify": "^3.4.14",
     "globby": "^16.2.4",

@@ -1,49 +1,55 @@
 import { describe, expect, test } from 'bun:test'
+import type { AutoModeVerdict } from '../../src/core/autoMode.ts'
 import { describePermissionRequest } from '../../src/core/permissionPrompt.ts'
 
+const flagged: AutoModeVerdict = {
+  kind: 'flag',
+  fired: [
+    { rule: { id: 'push', text: 'Pushes to a remote' }, probability: 0.91 },
+    { rule: { id: 'history', text: 'Rewrites git history' }, probability: 0.42 },
+  ],
+}
+
 describe('describePermissionRequest', () => {
-  test('a sandbox escape names the command and says why it is being asked', () => {
-    const prompt = describePermissionRequest('Bash', {
-      command: 'bun install --frozen-lockfile',
-      description: 'Install dependencies',
-      dangerouslyDisableSandbox: true,
-    })
+  test('a flagged command is quoted, and names every statement it ran into', () => {
+    const prompt = describePermissionRequest(
+      'Bash',
+      { command: 'git push --force', description: 'Force push' },
+      { verdict: flagged },
+    )
 
-    expect(prompt.title).toBe('Run a command outside the sandbox?')
-    expect(prompt.subject).toBe('bun install --frozen-lockfile')
-    expect(prompt.description).toBe('Install dependencies')
-    expect(prompt.reason).toContain('sandbox')
+    expect(prompt.title).toBe('Run this command?')
+    expect(prompt.subject).toBe('git push --force')
+    expect(prompt.description).toBe('Force push')
+    expect(prompt.reason).toContain('“Pushes to a remote” (91%)')
+    expect(prompt.reason).toContain('“Rewrites git history” (42%)')
+    expect(prompt.flagged).toEqual([
+      { text: 'Pushes to a remote', probability: 0.91 },
+      { text: 'Rewrites git history', probability: 0.42 },
+    ])
   })
 
-  test('a sudo command is named as such rather than as a sandbox escape', () => {
-    const prompt = describePermissionRequest('Bash', { command: 'sudo rm -rf /tmp/x' })
-
-    expect(prompt.title).toBe('Run a command as root?')
-    expect(prompt.subject).toBe('sudo rm -rf /tmp/x')
-    expect(prompt.reason).toContain('root')
+  test('an unavailable judge says why, and lists nothing as flagged', () => {
+    const prompt = describePermissionRequest(
+      'Bash',
+      { command: 'ls' },
+      { verdict: { kind: 'unavailable', reason: 'TYPESAFE_API_KEY is not set' } },
+    )
+    expect(prompt.reason).toContain('TYPESAFE_API_KEY is not set')
+    expect(prompt.flagged).toEqual([])
   })
 
-  test('sudo wins over a sandbox escape when a command is both', () => {
-    const prompt = describePermissionRequest('Bash', {
-      command: 'sudo make install',
-      dangerouslyDisableSandbox: true,
-    })
-
-    expect(prompt.title).toBe('Run a command as root?')
-  })
-
-  test('a denied Bash command shows the command and blames the deny pattern', () => {
-    const prompt = describePermissionRequest('Bash', { command: 'rm -rf build' })
-
-    expect(prompt.subject).toBe('rm -rf build')
-    expect(prompt.reason).toContain('deny pattern')
+  test('with auto-mode off, it says so and where to turn it on', () => {
+    for (const context of [{}, { verdict: { kind: 'off' } as const }]) {
+      const prompt = describePermissionRequest('Bash', { command: 'ls' }, context)
+      expect(prompt.reason).toContain('not set up')
+    }
   })
 
   test('a non-Bash tool falls back to its own name and pulls out its subject', () => {
-    expect(describePermissionRequest('WebFetch', { url: 'https://example.com' })).toMatchObject({
-      title: 'Allow WebFetch?',
-      subject: 'https://example.com',
-    })
+    expect(
+      describePermissionRequest('WebFetch', { url: 'https://example.com' }, { verdict: flagged }),
+    ).toMatchObject({ title: 'Allow WebFetch?', subject: 'https://example.com' })
     expect(describePermissionRequest('Read', { file_path: '/etc/hosts' })).toMatchObject({
       title: 'Allow Read?',
       subject: '/etc/hosts',
@@ -56,27 +62,15 @@ describe('describePermissionRequest', () => {
       { pattern: 'TODO' },
       { title: 'Claude wants to search for TODO' },
     )
-
     expect(prompt.title).toBe('Claude wants to search for TODO')
-  })
-
-  test("a bridge title never overrides the sandbox escape's own explanation", () => {
-    const prompt = describePermissionRequest(
-      'Bash',
-      { command: 'echo hi', dangerouslyDisableSandbox: true },
-      { title: 'Claude wants to run echo hi' },
-    )
-
-    expect(prompt.title).toBe('Run a command outside the sandbox?')
   })
 
   test('a blocked path is surfaced when the bridge reports one', () => {
     const prompt = describePermissionRequest(
       'Bash',
       { command: 'cat /etc/passwd', dangerouslyDisableSandbox: true },
-      { blockedPath: '/etc/passwd' },
+      { blockedPath: '/etc/passwd', verdict: flagged },
     )
-
     expect(prompt.reason).toContain('/etc/passwd')
   })
 
@@ -87,7 +81,6 @@ describe('describePermissionRequest', () => {
 
   test('the model description is dropped when it is not a string', () => {
     const prompt = describePermissionRequest('Bash', { command: 'ls', description: 42 })
-
     expect(prompt.description).toBeNull()
   })
 })
@@ -112,24 +105,5 @@ describe('a call stopped by plan mode', () => {
   test('says that allowing it does not turn plan mode off', () => {
     const prompt = describePermissionRequest('Bash', { command: 'npm install' }, planning)
     expect(prompt.reason).toContain('plan mode stays on')
-  })
-
-  test('running as root outranks it — the worse fact is the one worth saying', () => {
-    const prompt = describePermissionRequest('Bash', { command: 'sudo make install' }, planning)
-    expect(prompt.title).toBe('Run a command as root?')
-  })
-
-  test('leaving the sandbox outranks it too', () => {
-    const prompt = describePermissionRequest(
-      'Bash',
-      { command: 'ls', dangerouslyDisableSandbox: true },
-      planning,
-    )
-    expect(prompt.title).toBe('Run a command outside the sandbox?')
-  })
-
-  test('without the flag it is still a deny pattern, as before', () => {
-    const prompt = describePermissionRequest('Bash', { command: 'rm -rf /' }, {})
-    expect(prompt.reason).toContain('deny pattern')
   })
 })

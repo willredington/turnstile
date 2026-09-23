@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { activityOf } from '../../../core/activity.ts'
 import { notesForFile, orphanedAnnotations } from '../../../core/annotations.ts'
+import type { AutoModeSettings } from '../../../core/autoMode.ts'
 import { neighbourOf, openFile, tabKey } from '../../../core/tabs.ts'
 import type { BaselineSource, DiffView, SessionState } from '../../../core/types.ts'
 import { waitingOn } from '../../../core/waiting.ts'
+import { AutoModeSetup } from './AutoModeSetup.tsx'
 import { changedFiles, marksByPath, ReviewRail } from './ChangedFiles.tsx'
 import { Chevron } from './Chevron.tsx'
 import { ContextFileView } from './ContextFileView.tsx'
@@ -258,8 +260,45 @@ function useOpenFiles(cwd: string): [string[], (next: string[]) => void] {
   return [open, set]
 }
 
+/**
+ * Whether auto-mode is set up, asked once on load; the setup screen reports what it saved. With
+ * nothing set up every tool call asks, so the first load opens the setup screen by itself — once
+ * per page, since "Later" is an answer too.
+ */
+function useAutoMode() {
+  const [status, setStatus] = useState<'on' | 'off' | null>(null)
+  const [setupOpen, setSetupOpen] = useState(false)
+
+  useEffect(() => {
+    let live = true
+    void fetch('/auto-mode')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((settings: AutoModeSettings | null) => {
+        if (!live || settings === null) return
+        setStatus(settings.policy === null ? 'off' : 'on')
+        if (settings.policy === null) setSetupOpen(true)
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [])
+
+  return {
+    status,
+    setupOpen,
+    open: useCallback(() => setSetupOpen(true), []),
+    close: useCallback(() => setSetupOpen(false), []),
+    saved: useCallback(
+      (settings: AutoModeSettings) => setStatus(settings.policy === null ? 'off' : 'on'),
+      [],
+    ),
+  }
+}
+
 export function App() {
   const state = useSession()
+  const autoMode = useAutoMode()
   const diff = useDiff(state.diffRevision)
   const waiting = waitingOn(state.status)
 
@@ -493,6 +532,8 @@ export function App() {
         thinkingLevel={state.thinkingLevel}
         contextUsed={state.contextUsed}
         contextSize={state.contextSize}
+        autoMode={autoMode.status}
+        onAutoMode={autoMode.open}
       />
 
       {state.tracking === 'not-git' ? (
@@ -609,6 +650,7 @@ export function App() {
       {/* Both are `position: fixed; inset: 0` at the same z-index — when a permission prompt
           and a clarifying question are pending at once, DOM order alone puts the question on
           top, since answering it is usually what unblocks whatever else is waiting. */}
+      {autoMode.setupOpen && <AutoModeSetup onClose={autoMode.close} onSaved={autoMode.saved} />}
       <PermissionOverlay permissions={state.permissions} />
       <QuestionOverlay questions={state.questions} />
     </div>

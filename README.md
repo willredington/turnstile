@@ -3,6 +3,9 @@
 A review companion for a coding agent. It fights **human cognitive drift**: the slide into
 rubber-stamping an agent's changes without actually processing them.
 
+Turnstile is a desktop app for macOS, built with Tauri. You open a repository in it, and
+everything happens in its window.
+
 Turnstile *is* the client the agent talks to. It drives Claude Code directly through the
 Claude Agent SDK (no separate proxy process in between), runs it right in your checkout, and
 shows you everything that session has changed since it started, as it happens. When a turn
@@ -35,14 +38,17 @@ exists to catch — not friction to design away.
 
 These steps assume macOS.
 
-- **Bun 1.3+**: builds Turnstile and runs it from source.
+- **Bun 1.3+**: builds the app's Turnstile process, which the desktop shell runs.
 - **Node.js and npm**: run the desktop app's Tauri tooling.
 - **Rust**, via rustup, plus the Xcode Command Line Tools. Tauri compiles the desktop shell with them.
 - **Claude Code, logged in.** Turnstile drives Claude Code through the Claude Agent SDK, which
   spawns the `claude` CLI itself. The CLI authenticates however it normally does: its own login,
   or `ANTHROPIC_API_KEY` in the environment. Turnstile does not manage that.
-- **An OpenRouter API key**, for answering questions about code (see "Asking about code" below).
-  The review doesn't use it: it runs on Claude Code, like the agent.
+- **A TypeSafe API key**, for auto-mode, which decides which tool calls to ask you about (see
+  "Tool permissions" below). Without one, every tool call asks you.
+- **An OpenRouter API key** (optional), only for asking questions about code (see "Asking about
+  code" below). Nothing else uses it: the review runs on Claude Code, like the agent, and
+  auto-mode runs on TypeSafe.
 - **A git repository to work in.** If the folder you pick isn't one, Turnstile offers to create it.
 
 ## Setup
@@ -56,20 +62,26 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust
 npm install -g @anthropic-ai/claude-code && claude       # log in to Claude Code once, then exit
 ```
 
-### 2. Set your OpenRouter API key
+### 2. Set your API keys
 
-Create a key at <https://openrouter.ai/keys>, then export it from your shell profile so every
-terminal has it, including the one you launch the desktop app from:
+Export them from your shell profile so every terminal has them, including the one you launch
+the desktop app from:
 
 ```bash
-echo 'export OPENROUTER_API_KEY=sk-or-...' >> ~/.zshrc
+echo 'export TYPESAFE_API_KEY=...' >> ~/.zshrc          # auto-mode
+echo 'export OPENROUTER_API_KEY=sk-or-...' >> ~/.zshrc  # optional: asking about code
 source ~/.zshrc
 ```
 
-Turnstile reads the key only from the environment, never from a config file. The key is checked
-per request, so a missing one doesn't stop the app from starting. A question fails with an error
-on screen instead. To use a variable with a different name, set
-`openrouter.apiKeyEnv` in config.
+- **`TYPESAFE_API_KEY`** is for auto-mode's judge. Without it, auto-mode can't judge anything,
+  so every tool call asks you.
+- **`OPENROUTER_API_KEY`** is only for "Asking about code". Create one at
+  <https://openrouter.ai/keys>. Without it, a question shows an error on its card, and nothing
+  else changes.
+
+Turnstile reads keys only from the environment, never from a config file, and checks them each
+time it uses one. A missing key never stops the app from starting. To use variables with other
+names, set `typesafe.apiKeyEnv` or `openrouter.apiKeyEnv` in config.
 
 ### 3. Write your user-level config
 
@@ -105,28 +117,17 @@ npm run tauri dev       # builds dist/turnstile, compiles the Tauri shell, opens
 ```
 
 The first `tauri dev` compiles the Rust side and takes a few minutes. Later runs are quicker.
-Each run rebuilds the `turnstile` binary first (`scripts/prepare-sidecar.mjs`), so the window
-always runs your current source. It prints the build's hash and commit as it starts. When the
-window opens, pick the repository you want to work in. To switch repositories later, use
+Each run rebuilds the `turnstile` binary first (`desktop/scripts/prepare-sidecar.mjs`, run with
+Bun, so `bun` has to be on your `PATH`), so the window always runs your current source. It
+prints the build's hash and commit as it starts. The first time the window opens, pick the
+repository you want to work in. After that it reopens the last one. To switch repositories, use
 **File → Open Folder…** (⌘O).
 
-Launch it **from a terminal that has `OPENROUTER_API_KEY` set**. The app hands its environment
-down to Turnstile, so a key exported only in some other shell won't reach it.
+Launch it **from a terminal that has your keys set**. The app hands its environment down to
+Turnstile, so a key exported only in some other shell won't reach it.
 
-### Without the desktop app
-
-Turnstile also runs as a CLI that serves the same UI in a browser tab:
-
-```bash
-bun link                 # from the repo root: puts `turnstile` on your PATH
-cd /your/project
-turnstile                # serves the UI and opens a browser tab
-```
-
-`turnstile init` writes a repo-level `.turnstile/config.json`, if a project needs settings of its
-own. `TURNSTILE_NO_BROWSER=1` stops the tab from opening; the URL is printed either way.
-`TURNSTILE_CLAUDE_CODE_EXECUTABLE` tells Turnstile which `claude` binary to spawn, for the rare
-case where the SDK can't find one on its own.
+If Turnstile can't find the `claude` binary on its own, set `TURNSTILE_CLAUDE_CODE_EXECUTABLE` to
+its path before launching. A packaged build bundles its own and sets this for you.
 
 ## How a session goes
 
@@ -153,7 +154,7 @@ reach it when you send them.
 
 ## The baseline, and what's on the list
 
-The agent works directly in your checkout, in the directory you launched Turnstile from. When a
+The agent works directly in your checkout, the folder you opened in the app. When a
 session sends its first message, the checkout's tree as it stands — committed, uncommitted and
 untracked files alike — is recorded in git as `refs/turnstile/baselines/<session>`, through a
 scratch index that never touches yours. That is the **baseline**.
@@ -228,12 +229,10 @@ is mid-turn and in no position to answer.
 Select some code and ask. The answer arrives as a card set into the file under those lines, and
 you can keep asking follow-ups in it.
 
-- **On a changed file**, a small **Ask** appears beside the selection. It opens the same box a
-  gutter drag opens, because there a selection can become either a note or a question.
-- **On any other file** — anything you opened from the project tree — a question box opens
-  straight away, since asking is the only thing a selection can become there. Enter asks,
-  Escape dismisses.
-- **Dragging the line numbers** works too, and now offers **Ask** beside **Leave note**.
+- **Select code with the mouse** and a box opens on it straight away, with **Leave note** and
+  **Ask**. This works on every file, changed or not. Before a session has opened there's nowhere
+  to keep a note, so the box offers only **Ask**.
+- **Dragging the line numbers** opens the same box.
 - **"Ask about this file"** in the file pane's header asks about the whole thing. That answer
   rides at the top of the document.
 
@@ -252,30 +251,45 @@ Three things it deliberately does not do:
   close the page. If an answer is worth keeping or acting on, write it as a note — that is the
   thing that persists and reaches the agent.
 
-Without an API key, asking says so on the card rather than hanging.
+Without `OPENROUTER_API_KEY`, asking says so on the card rather than hanging. Nothing else needs it.
 
 ## Tool permissions
 
 The agent's native `Edit`/`Write` tools are disallowed; Turnstile's own write tool is the only
 way a file's contents change, and it only writes inside the repository.
 
-Everything that isn't a file write — a shell command, an MCP tool call — auto-approves by
-default; asking you to click "Allow" on every `git status` would just retrain you to
-rubber-stamp permission prompts, which is the exact drift this tool exists to fight. Only two
-things still stop for a yes/no prompt: `sudo`, denied unconditionally, and whatever you name in
-config:
+Everything else, such as a shell command or an MCP tool call, goes through **auto-mode**. You
+set it up once, in the app. It opens by itself the first time, and you can reopen it later from
+**Auto-mode** in the top bar. There you say, in plain words, when the agent should ask you first:
 
-```json
-{
-  "toolPermissions": {
-    "denyPatterns": ["rm -rf", "^mcp__some-server__"]
-  }
-}
-```
+- "Runs a command with elevated privileges (sudo, doas, su)"
+- "Pushes, publishes or deploys anything"
+- "Touches anything under infra/"
 
-Each pattern is a regular expression. For a `Bash` call it matches the full command text — so
-`rm -rf` denies only that shape of command — and for every other tool it matches the tool name,
-so `^mcp__some-server__` denies a whole MCP server by name.
+Some suggestions are ticked for you. You can reword them, untick them or add your own.
+
+Before each tool call, Turnstile asks TypeSafe one yes/no question per statement, all in one
+request: does this call do what the statement describes? Each answer is a probability. If any
+statement reaches the threshold, you're asked, and the prompt shows which statements matched and
+how likely each one looked. Otherwise the call runs. A **Sensitivity** setting picks the
+threshold: Strict (15%), Balanced (30%) or Relaxed (50%). **Try a command** on the setup screen
+shows how each statement scores against a command before you save.
+
+**If auto-mode can't decide, you decide.** That covers auto-mode not being set up yet, a missing
+`TYPESAFE_API_KEY`, a network error, a slow answer (past `typesafe.timeoutMs`) and an answer
+missing for any statement. In each case the call becomes an ordinary prompt that says why.
+Identical calls reuse an earlier answer within a run, so repeating `bun test` isn't a round trip
+every time. Failures are never reused.
+
+Two things stay outside auto-mode, and no statement changes them:
+
+- A call that names Turnstile's own state (`.turnstile/`, `~/.turnstile`) is refused outright.
+- In plan mode, anything that does more than read asks you (see below).
+
+Your statements live in `~/.turnstile/auto-mode.json`, per user rather than per repository. The
+agent can't read or change that file. If your config still has `toolPermissions.denyPatterns` from
+before auto-mode, the setup screen lists each pattern as a statement for you to reword. The old
+key is otherwise ignored.
 
 ## Plan mode
 
@@ -294,9 +308,9 @@ The agent's own plan file is the exception, and it is not a hole: it writes that
 of Turnstile's own, which can only ever write one markdown file into Claude Code's plan
 directory — never into your project. So planning costs you no prompts at all.
 
-This is stricter than the rest of Turnstile on purpose. Everywhere else, tool calls auto-approve
-unless you name them in `denyPatterns`, because a prompt for every `git status` just teaches you
-to click through. Plan mode has no review behind it to catch what slipped past, so the bias flips
+This is stricter than the rest of Turnstile on purpose. Everywhere else, auto-mode lets through
+what your statements don't describe, because a prompt for every `git status` just teaches you to
+click through. Plan mode has no review behind it to catch what slipped past, so the bias flips
 for as long as it is on.
 
 A submitted plan arrives **pinned at the top of the review rail**, rendered as the document it is —
@@ -399,14 +413,16 @@ behavior change made entirely of whitespace, so it is checked.
   "riskBar": {
     "alwaysReview": ["migrations/**", "src/auth/**"],
     "neverReview": ["generated/**"],
-    "specPaths": ["docs/plans/**", "*.plan.md"]
+    "specPaths": ["docs/plans/**", "**/*.plan.md"]
   }
 }
 ```
 
-`alwaysReview` forces a review and outranks everything. `neverReview` extends the built-in
-skip list rather than replacing it. `specPaths` names plan or spec documents that the
-documentation rule would otherwise skip.
+`alwaysReview` forces a review and outranks everything. `neverReview` adds to the built-in
+generated and vendored list rather than replacing it. `specPaths` names plan or spec documents
+that the documentation rule would otherwise skip. Globs are matched against the path from the
+repository root: `*` stays within one directory and `**` crosses directories. So `*.plan.md`
+only matches at the root, and `**/*.plan.md` matches anywhere.
 
 ### Files and chunks
 
@@ -445,14 +461,6 @@ Reading the tree never touches the index, HEAD, stash, reflog or history. Untrac
 is kept out by `untrackedExcludes` (`target/`, `node_modules/`, `dist/`, … by default), so an
 agent that builds a project before anyone has written a `.gitignore` doesn't flood the list.
 
-## Commands
-
-| Command | What it does |
-|---|---|
-| `turnstile` | Open the app. This is the normal way to use Turnstile. |
-| `turnstile init` | Write `.turnstile/config.json` and gitignore it. |
-| `turnstile reset` | Forget every note, reviewed mark and stored review in this repo. |
-
 ## Configuration
 
 ```json
@@ -464,7 +472,7 @@ agent that builds a project before anyone has written a `.gitignore` doesn't flo
     "timeoutMs": 60000
   },
   "riskBar": { "alwaysReview": [], "neverReview": [], "specPaths": [] },
-  "toolPermissions": { "denyPatterns": [] },
+  "typesafe": { "apiKeyEnv": "TYPESAFE_API_KEY", "model": "jev-latest", "timeoutMs": 5000 },
   "untrackedExcludes": ["target/", "node_modules/", "dist/", "build/", ".venv/", "__pycache__/"],
   "openrouter": { "apiKeyEnv": "OPENROUTER_API_KEY" },
   "telemetry": { "enabled": false, "endpoint": "http://127.0.0.1:4318" }
@@ -477,14 +485,32 @@ agent that builds a project before anyone has written a `.gitignore` doesn't flo
 - `maxTurns`: model round-trips one review may take. Every read, search and command counts.
 - `timeoutMs`: one review's whole budget. It reads every file a turn changed, so it isn't quick.
 
-`ask` configures answering a question about a selection (see "Asking about code"), over
-OpenRouter. It wants a fast, cheap model, since someone is watching a spinner. It defaults to
-Haiku; set `ask.model.models` (a priority-ordered fallback list — you are billed for whichever
-actually serves) to change it, and it must support tool calling.
+`typesafe` configures auto-mode's judge (see "Tool permissions"). Your statements aren't set here.
+You write them in the app.
+- `apiKeyEnv`: the environment variable holding the TypeSafe key.
+- `model`: the TypeSafe System One model that answers.
+- `timeoutMs`: how long one tool call may wait for a verdict, retries included. The agent is
+  blocked meanwhile, so it's short. When it runs out, the call asks you.
+
+`ask` configures answering a question about a selection (see "Asking about code"). It's the only
+thing that uses OpenRouter, and `openrouter.apiKeyEnv` names the variable holding its key. It
+wants a fast, cheap model, since someone is watching a spinner. It defaults to Haiku. To change
+it, set `ask.model.models`: OpenRouter model ids in priority order, where you're billed for
+whichever one serves. The model must support tool calling. If you set `ask.model`, include
+`models`, since the field is required there.
+- `model.temperature`: defaults to 0.
+- `model.provider`: optional OpenRouter provider preferences (`order`, `only`, `ignore`,
+  `allow_fallbacks`, `sort`).
 - `maxSteps`: tool-using steps before it must answer with what it has.
 - `timeoutMs`: one question's whole budget, tool calls included. Both attempts of a retried
   question share it, so a failure that is going to be reported is reported inside this budget
   rather than twice it.
+
+`riskBar` picks which changed files skip the review (see "What isn't reviewed").
+
+`untrackedExcludes` lists gitignore-style patterns for untracked files that never reach the
+list, on top of your own ignore rules. Setting it replaces the default list rather than adding
+to it. Files git already tracks aren't affected.
 
 ### Telemetry
 
@@ -534,9 +560,10 @@ Two things export, and they meet in the backend rather than in Turnstile:
   tokens and tool names, never the prompt or reply — which is where to look when a question
   comes back unanswered. Counters for `turnstile.review.files` (by outcome: reviewed, failed or
   skipped), `turnstile.findings` (by severity), `turnstile.files.saved` (by actor — yours or
-  the agent's — and outcome) and `turnstile.notes.sent`. Histograms for
-  `turnstile.editor.build` and `turnstile.editor.keystroke.latency`, measured in the browser
-  where the keystroke actually lands and batched to the server.
+  the agent's — and outcome), `turnstile.notes.sent` and `turnstile.ask.questions` (by
+  outcome: answered or failed). Histograms, in milliseconds, for
+  `turnstile.editor.build` and `turnstile.editor.keystroke.latency`, measured in the app's
+  window where the keystroke actually lands, and batched to Turnstile's process.
 - **The agent**, as `service.name=claude-code`. The Claude Code CLI is instrumented already, so
   its per-turn spans, model requests, tool calls, tokens and cost come from setting its
   environment rather than from any code here. `"agent": false` leaves it alone.
@@ -552,13 +579,15 @@ accepts the agent's metrics and then discards them — cost and tokens included 
 own land normally. It is set for you; the note is here because the symptom (half the metrics
 missing, no error anywhere) is otherwise very hard to place.
 
-Other fields: `serviceName` (default `turnstile`), `traces` and `metrics` to disable a signal,
+Other fields: `serviceName` (default `turnstile`), `traces` and `metrics` to turn off a signal
+(for Turnstile and the agent alike; the agent's logs are always exported while `agent` is on),
 `headers` (`key=value,key=value`) for a collector wanting an `Authorization` header, and
 `diagnostics` to report export failures instead of dropping telemetry silently — worth turning
 on the first time you point at a new collector.
 
-**Nothing you write or say is exported.** Durations, counts, file paths on review spans, model
-and tool names. Not prompts, not file contents, not API bodies. Claude Code can export those
+**Nothing you write or say is exported.** Durations, counts, the repository root on diff spans,
+the file path on a question's span, model and tool names. Review spans carry a file count, not
+paths. Not prompts, not file contents, not API bodies. Claude Code can export those
 through four `OTEL_LOG_*` variables; Turnstile never sets them, so enabling them is something
 you do deliberately in your own shell.
 
@@ -570,8 +599,13 @@ a stale `endpoint` cannot delay a session or stop the process exiting.
 `.turnstile/config.json` in the repo is read, and so is a personal `~/.turnstile/config.json` for
 defaults you want everywhere. Where both exist, a field the repo sets overrides your personal
 one, while a field only your personal config sets still applies. Arrays are replaced wholesale
-by whichever file sets them, never concatenated. `turnstile init` only writes the repo-level
-file.
+by whichever file sets them, never concatenated. Put only the fields a project needs in its
+`.turnstile/config.json`, since each one overrides your personal config. There's no need to
+gitignore `.turnstile/`: Turnstile keeps it out of `git status` itself, through the repository's
+`.git/info/exclude`.
+
+Auto-mode's statements aren't in either file. They're in `~/.turnstile/auto-mode.json`, written
+by the app's setup screen.
 
 ## Failure behavior
 
@@ -580,6 +614,7 @@ file.
 | Not a git repository | No session opens; the app offers to initialize the repository |
 | The review fails (Claude Code not logged in, an outage, a timeout) | Its files stay on the list, marked "review failed" with the error. The next turn that changes something, or **Review now**, retries them |
 | Malformed `.turnstile/config.json` | **Won't start** — a config that throws is safer than one that silently falls back to defaults you didn't choose |
+| Auto-mode can't answer (not set up, no `TYPESAFE_API_KEY`, an outage, a timeout) | Every tool call asks you, and the prompt says why. Nothing runs unchecked |
 | Agent process fails to spawn | Surfaced as a visible error in the conversation, not a silent hang |
 
 ## Architecture
@@ -594,7 +629,8 @@ app/        session.ts, board.ts, review.ts — the pipeline, against ports only
    ↑
 adapters/   agent-sdk · git · model · web · fs — each may import core, never a sibling adapter
    ↑
-cli/        composition root: builds the adapters, wires them into the session
+cli/        composition root and the entry point the desktop app launches (a historical name:
+            there is no command-line interface)
 ```
 
 The boundaries are enforced, not documented: `tests/architecture.test.ts` walks the real import
@@ -602,26 +638,29 @@ graph and fails the build on an illegal edge, naming it. The pipeline runs again
 tests — no git, model or agent needed.
 
 The UI is a real React app under `adapters/web/ui/`, bundled by Bun itself with no Vite and no
-separate build step, and embedded into the binary by `bun build --compile`.
+separate build step, and embedded into the binary by `bun build --compile`. The desktop app runs
+that binary as a sidecar and shows the UI it serves in its own window.
 
 ## Development
 
 ```bash
 bun run typecheck && bun run lint && bun test
-bun run build          # compiles to dist/turnstile with the UI embedded
-bun src/cli/main.ts    # run from source, against the current directory
+bun run desktop        # the desktop app from source (tauri dev), rebuilding Turnstile first
+bun run build          # just the Turnstile process: dist/turnstile, with the UI embedded
 ```
 
-`bun run simulate` starts the real web server against a fake, hand-built session — fixed files,
-a fixed diff, a fixed transcript — so you can iterate on the UI without an agent, git repo, or
-model call. The screenshots in this README were taken from it.
+`bun run simulate` serves the UI against a fake, hand-built session, with fixed files, a fixed
+diff and a fixed transcript, so you can work on the UI in a browser without an agent, a git
+repository or any model or API key. It's a development tool, not a way to use Turnstile. The
+screenshots in this README were taken from it.
 
-For the real thing, run it against a scratch repository — the agent works directly in whatever
-checkout Turnstile was launched in.
+For the real thing, open a scratch repository in the desktop app. The agent works directly in
+whatever folder you open.
 
-No network access or API key is required to run the test suite — model calls sit behind the
-`Reviewer` port and are faked in tests. The reviewer agent itself is tested against the AI SDK's
-mock model.
+The test suite needs no network access and no API key. The review, questions and auto-mode's
+judge sit behind the `Reviewer`, `Asker` and `CallJudge` ports and are faked in tests. The
+reviewer's own adapter is driven by a scripted `query()` in place of Claude Code, and auto-mode's
+TypeSafe adapter by an injected `fetch`.
 
 ## Scope
 

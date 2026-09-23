@@ -386,6 +386,7 @@ export function createSession(deps: SessionDeps): Session {
             subject: event.subject,
             description: event.description,
             reason: event.reason,
+            ...(event.flagged === undefined ? {} : { flagged: event.flagged }),
             options: event.options,
           },
         ],
