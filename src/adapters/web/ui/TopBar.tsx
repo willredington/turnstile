@@ -246,7 +246,7 @@ export function TopBar({
             }
             onClick={onAutoMode}
           >
-            {autoMode === 'on' ? 'Auto-mode' : 'Set up auto-mode'}
+            {autoMode === 'on' ? 'Edit auto-mode' : 'Set up auto-mode'}
           </button>
         )}
         <SessionSwitcher

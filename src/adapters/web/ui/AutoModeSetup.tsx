@@ -47,7 +47,12 @@ function policyFrom(drafts: Draft[], threshold: number): AutoModePolicy {
   }
 }
 
-const percent = (probability: number): string => `${Math.round(probability * 100)}%`
+/** What each sensitivity does, in words, since the threshold behind it means nothing to a reader. */
+const SENSITIVITY_HINTS: Record<(typeof SENSITIVITIES)[number]['id'], string> = {
+  strict: 'Asks at the faintest resemblance to a statement',
+  balanced: 'Asks when a call plausibly matches a statement',
+  relaxed: 'Asks only when a call clearly matches a statement',
+}
 
 /**
  * Auto-mode's one-time setup, and where it is changed later.
@@ -161,6 +166,12 @@ export function AutoModeSetup({
 
   const probabilityOf = (id: string): number | null =>
     trial?.probabilities.find((entry) => entry.id === id)?.probability ?? null
+  const startOver = (): void => {
+    if (settings === null) return
+    setDrafts(draftsFrom({ ...settings, policy: null }))
+    setThreshold(DEFAULT_THRESHOLD)
+    setTrial(null)
+  }
   const kept = drafts.filter((draft) => draft.enabled && draft.text.trim() !== '').length
 
   return (
@@ -201,9 +212,13 @@ export function AutoModeSetup({
                     {probability !== null && (
                       <span
                         className={`auto-mode-score${fired ? ' auto-mode-score-fired' : ''}`}
-                        title="How likely the judge thinks the command does this"
+                        title={
+                          fired
+                            ? 'The command looks like this, so you would be asked'
+                            : 'The command does not look like this'
+                        }
                       >
-                        {percent(probability)}
+                        {fired ? 'Asks' : 'Passes'}
                       </span>
                     )}
                     {!draft.seed && (
@@ -249,7 +264,7 @@ export function AutoModeSetup({
                   type="button"
                   className={`btn ${threshold === choice.threshold ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => setThreshold(choice.threshold)}
-                  title={`Ask when a statement is at least ${percent(choice.threshold)} likely`}
+                  title={SENSITIVITY_HINTS[choice.id]}
                 >
                   {choice.label}
                 </button>
@@ -283,8 +298,8 @@ export function AutoModeSetup({
             </form>
             {trial !== null && (
               <p className="permission-reason auto-mode-verdict">
-                {trial.verdict.kind === 'allow' && 'Would run without asking.'}
-                {trial.verdict.kind === 'flag' && 'Would ask you first.'}
+                {trial.verdict.kind === 'allow' && 'Passes: would run without asking.'}
+                {trial.verdict.kind === 'flag' && 'Asks: would ask you first.'}
                 {trial.verdict.kind === 'unavailable' &&
                   `Couldn't check (${trial.verdict.reason}). Until it can, every call asks you.`}
               </p>
@@ -295,6 +310,16 @@ export function AutoModeSetup({
         {error !== null && <p className="permission-reason auto-mode-error">{error}</p>}
 
         <div className="auto-mode-actions">
+          {settings?.policy != null && (
+            <button
+              type="button"
+              className="btn btn-secondary auto-mode-start-over"
+              title="Back to the suggested statements and Balanced, as on first setup. Nothing changes until you save."
+              onClick={startOver}
+            >
+              Start over
+            </button>
+          )}
           <button type="button" className="btn btn-secondary" onClick={onClose}>
             {settings?.policy === null ? 'Later' : 'Cancel'}
           </button>

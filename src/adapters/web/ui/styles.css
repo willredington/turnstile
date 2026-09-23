@@ -1247,17 +1247,11 @@ button:disabled {
 
 .permission-flagged-item {
   display: flex;
-  justify-content: space-between;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   border-left: 2px solid var(--med);
   background: rgb(var(--med-rgb) / 8%);
-}
-
-.permission-flagged-score {
-  color: var(--med);
-  font-variant-numeric: tabular-nums;
 }
 
 .auto-mode-card {
@@ -1353,6 +1347,10 @@ button:disabled {
   justify-content: flex-end;
   gap: var(--space-2);
   margin-top: var(--space-4);
+}
+
+.auto-mode-start-over {
+  margin-right: auto;
 }
 
 .top-bar-auto-mode-off {

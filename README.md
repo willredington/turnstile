@@ -260,7 +260,7 @@ way a file's contents change, and it only writes inside the repository.
 
 Everything else, such as a shell command or an MCP tool call, goes through **auto-mode**. You
 set it up once, in the app. It opens by itself the first time, and you can reopen it later from
-**Auto-mode** in the top bar. There you say, in plain words, when the agent should ask you first:
+**Edit auto-mode** in the top bar, where **Start over** puts back the suggestions. There you say, in plain words, when the agent should ask you first:
 
 - "Runs a command with elevated privileges (sudo, doas, su)"
 - "Pushes, publishes or deploys anything"
@@ -270,10 +270,11 @@ Some suggestions are ticked for you. You can reword them, untick them or add you
 
 Before each tool call, Turnstile asks TypeSafe one yes/no question per statement, all in one
 request: does this call do what the statement describes? Each answer is a probability. If any
-statement reaches the threshold, you're asked, and the prompt shows which statements matched and
-how likely each one looked. Otherwise the call runs. A **Sensitivity** setting picks the
-threshold: Strict (15%), Balanced (30%) or Relaxed (50%). **Try a command** on the setup screen
-shows how each statement scores against a command before you save.
+statement reaches the threshold, you're asked, and the prompt shows which statements matched.
+Otherwise the call runs. A **Sensitivity** setting picks the threshold: Strict (15%), Balanced
+(30%) or Relaxed (50%). **Try a command** on the setup screen shows, before you save, what would
+happen to a command: each statement reads **Asks** or **Passes**, and so does the call as a whole.
+The probabilities themselves are never shown.
 
 **If auto-mode can't decide, you decide.** That covers auto-mode not being set up yet, a missing
 `TYPESAFE_API_KEY`, a network error, a slow answer (past `typesafe.timeoutMs`) and an answer

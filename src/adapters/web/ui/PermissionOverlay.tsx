@@ -81,9 +81,6 @@ export function PermissionOverlay({ permissions }: { permissions: PendingPermiss
               {current.flagged.map((statement) => (
                 <li key={statement.text} className="permission-flagged-item">
                   <span>{statement.text}</span>
-                  <span className="permission-flagged-score">
-                    {Math.round(statement.probability * 100)}%
-                  </span>
                 </li>
               ))}
             </ul>
