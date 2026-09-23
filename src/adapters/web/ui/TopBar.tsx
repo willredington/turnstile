@@ -162,7 +162,7 @@ export function TopBar({
   contextUsed,
   contextSize,
   autoMode,
-  onAutoMode,
+  onSettings,
 }: {
   activity: Activity
   diff: DiffView | null
@@ -180,10 +180,10 @@ export function TopBar({
   contextUsed: number | null
   /** The agent's total context window size in tokens. */
   contextSize: number | null
-  /** Whether auto-mode is set up; null when the server offers none. */
+  /** Whether tool permissions are set up; null when the server offers none. */
   autoMode: 'on' | 'off' | null
-  /** Opens the auto-mode setup screen. */
-  onAutoMode: () => void
+  /** Opens the settings dialog. */
+  onSettings: () => void
 }) {
   const added = diff?.files.reduce((sum, file) => sum + file.patch.addedCount, 0) ?? 0
   const removed = diff?.files.reduce((sum, file) => sum + file.patch.removedCount, 0) ?? 0
@@ -235,20 +235,18 @@ export function TopBar({
             )}
           </div>
         )}
-        {autoMode !== null && (
-          <button
-            type="button"
-            className={`btn btn-secondary${autoMode === 'off' ? ' top-bar-auto-mode-off' : ''}`}
-            title={
-              autoMode === 'on'
-                ? 'Change when the agent asks you first'
-                : 'Tool permissions are not set up, so every tool call asks you'
-            }
-            onClick={onAutoMode}
-          >
-            {autoMode === 'on' ? 'Edit tool permissions' : 'Set up tool permissions'}
-          </button>
-        )}
+        <button
+          type="button"
+          className={`btn btn-secondary${autoMode === 'off' ? ' top-bar-auto-mode-off' : ''}`}
+          title={
+            autoMode === 'off'
+              ? 'Settings — tool permissions are not set up, so every tool call asks you'
+              : 'Settings'
+          }
+          onClick={onSettings}
+        >
+          Settings
+        </button>
         <SessionSwitcher
           currentSessionId={sessionId}
           disabled={switchDisabled}

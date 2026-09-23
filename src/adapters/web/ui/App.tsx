@@ -17,6 +17,7 @@ import { OpenTabs } from './OpenTabs.tsx'
 import { PermissionOverlay } from './PermissionOverlay.tsx'
 import { PlanView } from './PlanView.tsx'
 import { QuestionOverlay } from './QuestionOverlay.tsx'
+import { SettingsDialog } from './SettingsDialog.tsx'
 import { TopBar } from './TopBar.tsx'
 import { UntrackedPanel } from './UntrackedPanel.tsx'
 
@@ -299,6 +300,13 @@ function useAutoMode() {
 export function App() {
   const state = useSession()
   const autoMode = useAutoMode()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const openSettings = useCallback(() => setSettingsOpen(true), [])
+  const closeSettings = useCallback(() => setSettingsOpen(false), [])
+  const editAutoMode = useCallback(() => {
+    setSettingsOpen(false)
+    autoMode.open()
+  }, [autoMode.open])
   const diff = useDiff(state.diffRevision)
   const waiting = waitingOn(state.status)
 
@@ -533,7 +541,7 @@ export function App() {
         contextUsed={state.contextUsed}
         contextSize={state.contextSize}
         autoMode={autoMode.status}
-        onAutoMode={autoMode.open}
+        onSettings={openSettings}
       />
 
       {state.tracking === 'not-git' ? (
@@ -650,6 +658,13 @@ export function App() {
       {/* Both are `position: fixed; inset: 0` at the same z-index — when a permission prompt
           and a clarifying question are pending at once, DOM order alone puts the question on
           top, since answering it is usually what unblocks whatever else is waiting. */}
+      {settingsOpen && (
+        <SettingsDialog
+          autoMode={autoMode.status}
+          onEditAutoMode={editAutoMode}
+          onClose={closeSettings}
+        />
+      )}
       {autoMode.setupOpen && <AutoModeSetup onClose={autoMode.close} onSaved={autoMode.saved} />}
       <PermissionOverlay permissions={state.permissions} />
       <QuestionOverlay questions={state.questions} />
