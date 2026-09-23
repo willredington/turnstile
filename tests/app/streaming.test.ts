@@ -4,27 +4,23 @@ import { DEFAULT_CONFIG } from '../../src/core/config.ts'
 import type {
   AgentConnection,
   Baseline,
+  FindingStore,
+  Reviewer,
+  ReviewInput,
   RootRegistry,
   SnapshotStore,
 } from '../../src/core/ports.ts'
-import type {
-  AgentEvent,
-  FileDelta,
-  FileReview,
-  Finding,
-  SessionState,
-} from '../../src/core/types.ts'
+import type { AgentEvent, FileDelta, Finding, SessionState } from '../../src/core/types.ts'
 import { fakeRepository } from '../support/gitRepo.ts'
-import { EVERY_FILE } from '../support/rules.ts'
 
 /**
- * The board while the agent is still working.
+ * The board while the agent is still working, and the review once it stops.
  *
- * A turn is minutes of silence broken by edits, and the only honest thing to show during it
- * is the work as it lands. The way that used to fail: an edit arriving while the risk check
- * was mid-analysis was *dropped*, because the pass was single-flighted by skipping rather than
- * by queueing — so the board disagreed with what was actually on disk. These tests are about
- * the board matching the tree, during the turn and once it ends.
+ * A turn is minutes of silence broken by edits. The board follows them as they land — it is a
+ * git snapshot, and cheap — but the review waits for the turn to end: reviewing work the agent
+ * is still in the middle of is reviewing something about to change, and each review is a whole
+ * agent run. These tests are about both halves: the board matching the tree during the turn,
+ * and exactly one review of what the turn changed once it ends.
  */
 
 function delta(path: string): FileDelta {
@@ -46,45 +42,55 @@ const PATCH = `diff --git a/FILE b/FILE
 -export const value = 1
 +export const value = 2`
 
-/** A tree that grows, so a test can add a file mid-turn the way an agent does. Every capture
- *  is measured against the baseline, so the board is exactly what has been added so far. */
+/**
+ * A tree that grows and changes, so a test can edit files mid-turn the way an agent does. Every
+ * capture is measured against the baseline; each edit gives the tree a new id and the file new
+ * contents, which is what a review is current against.
+ */
 function growingTree() {
-  const paths: string[] = []
+  const versions = new Map<string, number>()
+  let revision = 0
 
   const snapshots: SnapshotStore = {
-    capture: async () => `tree-${paths.length}`,
-    delta: async () => paths.map(delta),
+    capture: async () => `tree-${revision}`,
+    delta: async () => [...versions.keys()].map(delta),
     patch: async (_base, _next, path) => PATCH.replaceAll('FILE', path),
-    contents: async () => 'export const value = 2\n',
+    contents: async (_tree, path) => `export const value = ${versions.get(path) ?? 0}\n`,
   }
 
-  return { snapshots, add: (path: string) => paths.push(path) }
+  const edit = (path: string) => {
+    versions.set(path, (versions.get(path) ?? 0) + 1)
+    revision += 1
+  }
+  return { snapshots, edit }
 }
 
-/** A reviewer held open, so a pass can be caught in flight rather than raced against. */
-function heldSynthesizer() {
-  let release: () => void = () => {}
-  const held = new Promise<void>((resolve) => {
-    release = resolve
-  })
-  let started = 0
-
-  return {
-    release,
-    started: () => started,
-    reviewer: {
-      reviewFile: async (): Promise<Finding[]> => {
-        started += 1
-        await held
-        return []
-      },
+/** A reviewer that records what it is asked. With `hold`, each review waits for its own
+ *  `release(n)`, so a review can be caught in flight rather than raced against. */
+function reviewerFor(options: { hold?: boolean } = {}) {
+  const releases: (() => void)[] = []
+  const inputs: ReviewInput[] = []
+  const reviewer: Reviewer = {
+    review: async (input) => {
+      inputs.push(input)
+      if (options.hold === true) {
+        await new Promise<void>((resolve) => {
+          releases.push(resolve)
+        })
+      }
+      return new Map<string, Finding[]>(input.files.map((file) => [file.path, []]))
     },
+  }
+  return {
+    reviewer,
+    inputs,
+    release: (index: number) => releases[index]?.(),
+    reviewed: () => inputs.map((input) => input.files.map((file) => file.path)),
   }
 }
 
 const ROOT = '/repo'
 
-/** The single root every test in this file exercises, wrapped as a `RootRegistry` — just enough surface for `session.ts` to find the one root it was given. */
 function rootRegistryFor(snapshots: SnapshotStore, baseline: Baseline): RootRegistry {
   const handle = { root: ROOT, snapshots, baseline }
   return {
@@ -96,10 +102,13 @@ function rootRegistryFor(snapshots: SnapshotStore, baseline: Baseline): RootRegi
   }
 }
 
+const noFindings: FindingStore = { bySession: async () => [], put: async () => {} }
+
+/** `duringTurn` is what the agent does inside a prompt, before it stops. */
 function harness(
   snapshots: SnapshotStore,
-  reviewer: SessionDeps['reviewer'],
-  overrides: { connect?: SessionDeps['connect'] } = {},
+  reviewer: Reviewer,
+  options: { duringTurn?: () => Promise<void> | void } = {},
 ) {
   let emit: (event: AgentEvent) => void = () => {}
   let write: Parameters<SessionDeps['connect']>[1] = () => {
@@ -108,31 +117,28 @@ function harness(
   const states: SessionState[] = []
 
   const baseline: Baseline = {
-    resolve: async () => ({
-      tree: 'tree-base',
-      source: 'session-start',
-      branch: 'main',
-    }),
+    resolve: async () => ({ tree: 'tree-base', source: 'session-start', branch: 'main' }),
   }
 
-  const connectImpl: SessionDeps['connect'] =
-    overrides.connect ??
-    ((): AgentConnection => ({
-      start: async () => 'sess-1',
-      loadSession: async (id: string) => id,
-      prompt: async () => 'end_turn',
-      cancel: async () => {},
-      answerPermission: () => {},
-      answerQuestion: () => {},
-      setPermissionMode: async () => {},
-      stop: () => {},
-    }))
+  const connection = (): AgentConnection => ({
+    start: async () => 'sess-1',
+    loadSession: async (id: string) => id,
+    prompt: async () => {
+      await options.duringTurn?.()
+      return 'end_turn'
+    },
+    cancel: async () => {},
+    answerPermission: () => {},
+    answerQuestion: () => {},
+    setPermissionMode: async () => {},
+    stop: () => {},
+  })
 
   const deps: SessionDeps = {
-    connect: (onEvent, writeFile, requestPlanApproval, cwd) => {
+    connect: (onEvent, writeFile) => {
       emit = onEvent
       write = writeFile
-      return connectImpl(onEvent, writeFile, requestPlanApproval, cwd)
+      return connection()
     },
     history: { listSessions: async () => [] },
     openAt: 'start',
@@ -147,29 +153,8 @@ function harness(
     },
     hidden: { bySession: async () => [], hide: async () => {}, show: async () => {} },
     editTarget: { read: async () => null, write: async () => {} },
-    // Empty to begin with, so every file has to go through the reviewer — which is what
-    // puts a pass in flight for the second edit to arrive during. It remembers what it is
-    // given, because a fake that always missed would make a second pass look like it was
-    // re-analysing work it had already paid for.
-    cache: (() => {
-      const store = new Map<string, FileReview>()
-      return {
-        get: async (key: string) => store.get(key) ?? null,
-        put: async (key: string, review: FileReview) => {
-          store.set(key, review)
-        },
-        claim: async () => true,
-        release: async () => {},
-        prune: async () => {},
-      }
-    })(),
     reviewer,
-    rules: EVERY_FILE,
-    reader: {
-      read: async () => null,
-      glob: async () => ({ paths: [], truncated: false }),
-      grep: async () => ({ matches: [], truncated: false }),
-    },
+    findings: noFindings,
     config: DEFAULT_CONFIG,
     onChange: (state) => states.push(state),
   }
@@ -185,106 +170,58 @@ function harness(
 
 /** Let queued work drain without depending on how many awaits deep it is. */
 async function settle(): Promise<void> {
-  for (let i = 0; i < 50; i += 1) await Promise.resolve()
-  await new Promise((resolve) => setTimeout(resolve, 0))
+  for (let round = 0; round < 10; round += 1) {
+    for (let i = 0; i < 50; i += 1) await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
 }
 
-const CLEAN = { reviewFile: async (): Promise<Finding[]> => [] }
+/** A prompt the test holds open until it says so. */
+function openTurn() {
+  let finish: () => void = () => {}
+  const done = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  return { wait: () => done, finish }
+}
 
 describe('the board during a turn', () => {
-  test('shows a change as soon as its edit lands', async () => {
+  test('shows each change as soon as its edit lands, unreviewed', async () => {
     const tree = growingTree()
-    const held = heldSynthesizer()
-    const { session, write } = harness(tree.snapshots, held.reviewer)
+    const review = reviewerFor()
+    const turn = openTurn()
+    const { session, write } = harness(tree.snapshots, review.reviewer, {
+      duringTurn: turn.wait,
+    })
     await session.start()
 
-    tree.add('src/one.ts')
+    const sending = session.send('go')
+    await settle()
+    tree.edit('src/one.ts')
     await write('src/one.ts')
     await settle()
-
-    expect(session.state().chunks.map((chunk) => chunk.path)).toEqual(['src/one.ts'])
-    held.release()
-  })
-
-  /**
-   * The regression. The risk check takes tens of seconds per chunk and the agent does not wait
-   * for it, so most edits in a real turn land while a pass is running. Dropping those left the
-   * board frozen on whatever the first edit produced.
-   */
-  test('shows a change that lands while the risk check is still reading', async () => {
-    const tree = growingTree()
-    const held = heldSynthesizer()
-    const { session, write } = harness(tree.snapshots, held.reviewer)
-    await session.start()
-
-    tree.add('src/one.ts')
-    await write('src/one.ts')
-    await settle()
-    expect(held.started()).toBe(1)
-
-    // The pass is blocked inside the reviewer, exactly where a real one spends its time.
-    tree.add('src/two.ts')
+    tree.edit('src/two.ts')
     await write('src/two.ts')
     await settle()
 
-    expect(session.state().chunks.map((chunk) => chunk.path)).toEqual(['src/one.ts', 'src/two.ts'])
-    held.release()
+    const chunks = session.state().chunks
+    expect(chunks.map((chunk) => chunk.path)).toEqual(['src/one.ts', 'src/two.ts'])
+    expect(chunks.map((chunk) => chunk.status)).toEqual(['pending', 'pending'])
+    // The agent is still working: nothing has been sent for review.
+    expect(review.inputs).toHaveLength(0)
+
+    turn.finish()
+    await sending
   })
 
-  /** The list must not lose the spinner it is already showing to a recompute. */
-  test('keeps the in-flight analysis visible while the list grows', async () => {
-    const tree = growingTree()
-    const held = heldSynthesizer()
-    const { session, write } = harness(tree.snapshots, held.reviewer)
-    await session.start()
-
-    tree.add('src/one.ts')
-    await write('src/one.ts')
-    await settle()
-
-    tree.add('src/two.ts')
-    await write('src/two.ts')
-    await settle()
-
-    const first = session.state().chunks.find((chunk) => chunk.path === 'src/one.ts')
-    expect(first?.status).toBe('analyzing')
-    held.release()
-  })
-
-  /**
-   * A pass that finished while edits were arriving has to pick them up, or the chunks it
-   * missed stay unanalysed until something else happens to trigger a pass.
-   */
-  test('analyses what arrived while it was busy', async () => {
-    const tree = growingTree()
-    const held = heldSynthesizer()
-    const { session, write } = harness(tree.snapshots, held.reviewer)
-    await session.start()
-
-    tree.add('src/one.ts')
-    await write('src/one.ts')
-    await settle()
-
-    tree.add('src/two.ts')
-    await write('src/two.ts')
-    await settle()
-
-    held.release()
-    await settle()
-
-    expect(held.started()).toBe(2)
-  })
-})
-
-describe('the board without the write tool', () => {
   /** An agent that patches a file with Bash never calls the write tool; the finished Bash call
    *  is what tells the board to look again. */
   test('a finished Bash call refreshes the board', async () => {
     const tree = growingTree()
-    const { session, emit } = harness(tree.snapshots, CLEAN)
+    const { session, emit } = harness(tree.snapshots, reviewerFor().reviewer)
     await session.start()
 
-    tree.add('src/sed.ts')
+    tree.edit('src/sed.ts')
     emit({ kind: 'tool', id: 't1', title: 'sed -i', toolKind: 'execute', status: 'in_progress' })
     await settle()
     expect(session.state().chunks).toEqual([])
@@ -295,57 +232,114 @@ describe('the board without the write tool', () => {
   })
 })
 
-describe('the board when a turn ends', () => {
-  /**
-   * Whatever the board missed during the turn, the end of it catches: the board is re-read from
-   * the tree, not folded from what was announced along the way.
-   */
-  test('holds every change in the tree, including ones nothing announced', async () => {
+describe('the review when a turn ends', () => {
+  test('reviews everything the turn changed, once, in one run', async () => {
     const tree = growingTree()
-    let promptCalls = 0
-    const { session, write } = harness(tree.snapshots, CLEAN, {
-      connect: () => ({
-        start: async () => 'sess-1',
-        loadSession: async (id: string) => id,
-        prompt: async () => {
-          promptCalls += 1
-          // Both files land on disk, but only the first through the write tool.
-          tree.add('src/one.ts')
-          tree.add('src/two.ts')
-          await write('src/one.ts')
-          return 'end_turn'
-        },
-        cancel: async () => {},
-        answerPermission: () => {},
-        answerQuestion: () => {},
-        setPermissionMode: async () => {},
-        stop: () => {},
-      }),
+    const review = reviewerFor()
+    const { session, write } = harness(tree.snapshots, review.reviewer, {
+      duringTurn: async () => {
+        // Both land on disk, but only the first through the write tool.
+        tree.edit('src/one.ts')
+        await write('src/one.ts')
+        tree.edit('src/two.ts')
+      },
     })
     await session.start()
 
     await session.send('do the thing')
     await settle()
 
-    expect(promptCalls).toBe(1)
     expect(session.state().status).toBe('idle')
-    expect(session.state().chunks.map((chunk) => chunk.path)).toEqual(['src/one.ts', 'src/two.ts'])
-    expect(session.state().baseline).toBe('session-start')
+    expect(review.reviewed()).toEqual([['src/one.ts', 'src/two.ts']])
+    expect(session.state().chunks.map((chunk) => chunk.status)).toEqual(['ready', 'ready'])
+    expect(session.state().chunks[0]?.analysis?.riskLevel).toBe('none')
   })
 
-  /** Nothing blocks on the human any more: a turn with changes on the board still just ends. */
-  test('ends without waiting on anyone, and every file gets its review', async () => {
+  test('a turn that changed nothing is not reviewed', async () => {
     const tree = growingTree()
-    const { session, write } = harness(tree.snapshots, CLEAN)
+    const review = reviewerFor()
+    const { session } = harness(tree.snapshots, review.reviewer)
     await session.start()
 
-    tree.add('src/one.ts')
-    await write('src/one.ts')
-    await session.send('do the thing')
-    for (let i = 0; i < 20; i += 1) await settle()
+    await session.send('just a question')
+    await settle()
 
-    const chunks = session.state().chunks
-    expect(chunks.map((chunk) => chunk.status)).toEqual(['ready'])
-    expect(chunks[0]?.analysis?.riskLevel).toBe('none')
+    expect(review.inputs).toHaveLength(0)
+  })
+
+  /**
+   * A change the agent did not make — by hand, between turns — is on the board, but a turn that
+   * changes nothing does not pay to review it. It waits for the next turn that does, or for
+   * `reviewNow`.
+   */
+  test('a turn that changed nothing leaves an earlier hand edit unreviewed', async () => {
+    const tree = growingTree()
+    const review = reviewerFor()
+    const { session } = harness(tree.snapshots, review.reviewer)
+    await session.start()
+
+    tree.edit('src/by-hand.ts')
+    await session.send('just a question')
+    await settle()
+
+    expect(review.inputs).toHaveLength(0)
+    expect(session.state().chunks[0]?.status).toBe('pending')
+  })
+
+  test('the next turn that changes something reviews only what has no current review', async () => {
+    const tree = growingTree()
+    const review = reviewerFor()
+    let next = 'src/one.ts'
+    const { session } = harness(tree.snapshots, review.reviewer, {
+      duringTurn: () => tree.edit(next),
+    })
+    await session.start()
+
+    await session.send('first')
+    await settle()
+    next = 'src/two.ts'
+    await session.send('second')
+    await settle()
+
+    expect(review.reviewed()).toEqual([['src/one.ts'], ['src/two.ts']])
+  })
+
+  /**
+   * A review is current against the file as it stood when the review STARTED. A file the agent
+   * changes again while it is being read must not come out looking reviewed.
+   */
+  test('a file changed during its review stays unreviewed', async () => {
+    const tree = growingTree()
+    const review = reviewerFor({ hold: true })
+    let turns = 0
+    const { session, write } = harness(tree.snapshots, review.reviewer, {
+      duringTurn: async () => {
+        turns += 1
+        tree.edit('src/one.ts')
+        await write('src/one.ts')
+      },
+    })
+    await session.start()
+
+    await session.send('first')
+    await settle()
+    expect(review.inputs).toHaveLength(1)
+    expect(session.state().chunks[0]?.status).toBe('analyzing')
+
+    // A second turn edits the same file while the first review is still reading it.
+    await session.send('second')
+    await settle()
+    review.release(0)
+    await settle()
+
+    expect(turns).toBe(2)
+    // The first review lands on a file that has since changed: it is not the file's review, so
+    // the file reads under review again (the second turn's), never ready off the stale one.
+    expect(review.inputs).toHaveLength(2)
+    expect(session.state().chunks[0]?.status).toBe('analyzing')
+
+    review.release(1)
+    await settle()
+    expect(session.state().chunks[0]?.status).toBe('ready')
   })
 })

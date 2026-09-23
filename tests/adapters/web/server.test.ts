@@ -38,6 +38,7 @@ function fakeSession(overrides: Partial<Session> = {}): Session {
     annotate: async () => {},
     removeAnnotation: async () => {},
     saveFile: async () => ({ ok: true as const }),
+    reviewNow: () => {},
     hideFile: async () => {},
     showFile: async () => {},
     enterPlanMode: async () => {},
@@ -627,6 +628,33 @@ describe('/plan-mode', () => {
         body: JSON.stringify({ mode: 'plan' }),
       })
       expect(response.status).toBe(409)
+    } finally {
+      server.stop()
+    }
+  })
+})
+
+describe('/review', () => {
+  test('asks the session to review, and answers at once', async () => {
+    let asked = 0
+    const server = serveApp({
+      session: fakeSession({
+        state: () => SOME_STATE,
+        reviewNow: () => {
+          asked += 1
+        },
+      }),
+      projectTree: fakeProjectTree,
+      asker: fakeAsker,
+      reader: fakeReader,
+      roots: ONE_ROOT,
+      cwd: `${homedir()}/projects/turnstile`,
+      port: 0,
+    })
+    try {
+      const response = await fetch(`${server.url}review`, { method: 'POST' })
+      expect(response.status).toBe(200)
+      expect(asked).toBe(1)
     } finally {
       server.stop()
     }

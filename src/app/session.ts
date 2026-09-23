@@ -9,33 +9,22 @@ import {
   staleNotes,
   unsent,
 } from '../core/annotations.ts'
-import { boardKey } from '../core/chunking.ts'
 import type { TurnstileConfig } from '../core/config.ts'
-import { assignFindings, levelOf } from '../core/findings.ts'
-import {
-  markAnalyzing,
-  markFailed,
-  markReady,
-  markSkipped,
-  reconcile,
-  toBoardKeys,
-} from '../core/livechunks.ts'
+import { liveChunks, toBoardKeys } from '../core/livechunks.ts'
 import { parsePatch } from '../core/patch.ts'
 import type {
   AgentConnection,
   AgentConnectionFactory,
   AgentHistory,
-  AnalysisCache,
   AnnotationStore,
   EditTarget,
+  FindingStore,
   HiddenFileStore,
   OpenedSession,
-  RepoReader,
   Repository,
   Reviewer,
   RootHandle,
   RootRegistry,
-  RuleSource,
   SaveResult,
   Session,
   Telemetry,
@@ -50,6 +39,7 @@ import type {
   Chunk,
   DiffFile,
   DiffView,
+  FileFindings,
   LiveChunk,
   Queued,
   RootInfo,
@@ -57,8 +47,9 @@ import type {
   SessionState,
   SessionSummary,
   SnapshotId,
+  StoredReview,
 } from '../core/types.ts'
-import { captureBoardFor, chunksOf } from './board.ts'
+import { captureBoardFor, chunksOf, fileHashes } from './board.ts'
 import { coalesce } from './coalesce.ts'
 import { proposedContent, resolveEdit } from './editResolution.ts'
 import { review } from './review.ts'
@@ -89,12 +80,9 @@ export type SessionDeps = {
   /** Changed files the reader has hidden from the tab strip. */
   hidden: HiddenFileStore
   editTarget: EditTarget
-  cache: AnalysisCache
   reviewer: Reviewer
-  /** The repository's review rules and context docs. */
-  rules: RuleSource
-  /** The reviewer's read-only view of the repository. */
-  reader: RepoReader
+  /** Each session's file reviews, so a resume shows its last review again. */
+  findings: FindingStore
   config: TurnstileConfig
   /**
    * Where the session reports its own timings and counts. Silent by default, which is what the
@@ -128,7 +116,7 @@ const APPROVED_PROMPT =
   'session was interrupted; nothing about it has changed.'
 
 export function createSession(deps: SessionDeps): Session {
-  const { annotations, hidden, editTarget, cache, reviewer, config } = deps
+  const { annotations, hidden, editTarget, reviewer, config } = deps
   /**
    * Everything this session measures carries the session's id, which is how Turnstile's spans
    * and the agent CLI's own end up joinable in the backend. Read through a function rather than
@@ -198,9 +186,12 @@ export function createSession(deps: SessionDeps): Session {
   /** Serializes write-tool calls so two rapid ones never race two writes to the same file. */
   let proposeEditQueue: Promise<void> = Promise.resolve()
 
-  /** Keys a pass has claimed but not finished, so a recompute does not lose the spinner. */
-  const inFlight = new Set<string>()
-  /** Chunks whose last review failed, by content key, with why — see `markFailed`. */
+  /** Each file's last review, by `noteFileKey` — current only while the file still hashes the
+   *  same (`StoredReview.fileHash`). Loaded from `deps.findings` when a session opens. */
+  const reviews = new Map<string, StoredReview>()
+  /** Files a review is running on, by `noteFileKey`. */
+  const reviewing = new Set<string>()
+  /** Why the last review of a file failed, by `noteFileKey`. Cleared by its next review. */
   const failed = new Map<string, string>()
 
   /**
@@ -213,42 +204,56 @@ export function createSession(deps: SessionDeps): Session {
   const handleFor = (root: string): RootHandle | undefined =>
     deps.roots.knownRoots().find((handle) => handle.root === root)
 
-  /**
-   * Chunks as the sidebar sees them for ONE root, preserving reviews already known. A cached
-   * review is not looked up here: it is keyed by the whole file and the rules it was read
-   * against, and the review pass that follows every refresh reports cache hits straight away.
-   */
-  const toLive = (
-    root: string,
-    chunks: Chunk[],
-    skips: ReadonlyMap<string, string>,
-  ): LiveChunk[] => {
-    const previous = state.chunks.filter((chunk) => chunk.root === root)
-    return markSkipped(markFailed(reconcile(chunks, inFlight, previous), failed), skips)
+  /** The board as last read, per root: its chunks, the risk bar's skips, and each changed
+   *  file's current hash. */
+  type RootBoard = {
+    chunks: Chunk[]
+    skips: ReadonlyMap<string, string>
+    hashes: ReadonlyMap<string, string>
   }
+  const boards = new Map<string, RootBoard>()
 
   /**
-   * Replace the chunk list for whichever roots `perRoot` covers. Called before any analysis so
-   * the list appears the instant an edit lands.
+   * The chunk list and file-level findings, derived whole from the board and the reviews — so a
+   * file's findings show exactly while its review is current, and nothing else decides it.
    */
-  const publishChunks = async (
-    perRoot: ReadonlyMap<string, { chunks: Chunk[]; skips: ReadonlyMap<string, string> }>,
-  ): Promise<void> => {
-    const refreshed = new Set(perRoot.keys())
-    const fresh: LiveChunk[] = []
-    for (const [root, { chunks, skips }] of perRoot) {
-      fresh.push(...toBoardKeys(toLive(root, chunks, skips)))
+  const render = (): void => {
+    const chunks: LiveChunk[] = []
+    const fileFindings: FileFindings[] = []
+    for (const [root, board] of boards) {
+      const key = (path: string) => noteFileKey(root, path)
+      const live = liveChunks(board.chunks, board.skips, {
+        analyzing: (path) => reviewing.has(key(path)),
+        failure: (path) => failed.get(key(path)),
+        findingsFor: (path) => {
+          const review = reviews.get(key(path))
+          return review !== undefined && review.fileHash === board.hashes.get(path)
+            ? review.findings
+            : null
+        },
+      })
+      chunks.push(...toBoardKeys(live.chunks))
+      fileFindings.push(...live.fileFindings.map((entry) => ({ root, ...entry })))
     }
-    const chunks = [...state.chunks.filter((chunk) => !refreshed.has(chunk.root)), ...fresh]
-    // A file that has left the board takes its file-level findings with it.
-    const onBoard = new Set(chunks.map((chunk) => noteFileKey(chunk.root, chunk.path)))
     update({
       chunks,
-      fileFindings: state.fileFindings.filter((entry) =>
-        onBoard.has(noteFileKey(entry.root, entry.path)),
-      ),
+      fileFindings,
       roots: deps.roots.knownRoots().map((handle): RootInfo => ({ root: handle.root })),
     })
+  }
+
+  /** Forget every review, for a session being left. */
+  const clearReviews = (): void => {
+    reviews.clear()
+    reviewing.clear()
+    failed.clear()
+  }
+
+  /** The live session's stored reviews, as it opens. Unreadable reads as none reviewed. */
+  const loadReviews = async (): Promise<void> => {
+    clearReviews()
+    const stored = await deps.findings.bySession(state.sessionId).catch((): StoredReview[] => [])
+    for (const review of stored) reviews.set(noteFileKey(review.root, review.path), review)
   }
 
   /** One reporter shared by both paths into `refreshChunks` — the coalesced one and the
@@ -258,21 +263,26 @@ export function createSession(deps: SessionDeps): Session {
   /** Recompute the chunk list from the working tree. */
   const refreshChunks = async (): Promise<void> => {
     try {
-      const perRoot = new Map<string, { chunks: Chunk[]; skips: ReadonlyMap<string, string> }>()
+      const fresh = new Map<string, RootBoard>()
       let baseline: SessionState['baseline'] = null
       for (const handle of deps.roots.knownRoots()) {
         const board = await captureBoardFor(handle)
         baseline ??= board.resolution.source
-        const chunks = await chunksOf(handle.root, handle.snapshots, board.base, board.next, [
-          ...board.deltas,
-        ])
-        perRoot.set(handle.root, { chunks, skips: skipReasons(board.deltas, config.riskBar) })
+        fresh.set(handle.root, {
+          chunks: await chunksOf(handle.root, handle.snapshots, board.base, board.next, [
+            ...board.deltas,
+          ]),
+          skips: skipReasons(board.deltas, config.riskBar),
+          hashes: await fileHashes(handle.snapshots, board.next, board.deltas),
+        })
       }
-      if (perRoot.size === 0) {
+      boards.clear()
+      for (const [root, board] of fresh) boards.set(root, board)
+      if (boards.size === 0) {
         update({ chunks: [], fileFindings: [], roots: [], baseline: null })
         return
       }
-      await publishChunks(perRoot)
+      render()
       if (baseline !== state.baseline) update({ baseline })
     } catch (error) {
       // The list going stale is a display problem; failing the turn over it is not — this is
@@ -289,57 +299,64 @@ export function createSession(deps: SessionDeps): Session {
    */
   const refreshBoard = coalesce(refreshChunks, boardFailed)
 
+  const persistFailed = backgroundFailure('Saving the review')
+
+  /**
+   * Review every changed file with no current review (`app/review.ts`). Coalesced: asked for
+   * again while one runs, it runs once more after, over whatever is still unreviewed by then.
+   */
   const startReview = coalesce(async () => {
-    if (state.sessionId === '') return
+    const sessionId = state.sessionId
+    if (sessionId === '') return
+    // A review outlives nothing: once the session it was for is left, what it says is dropped.
+    const live = () => state.sessionId === sessionId
     await review({
       roots: deps.roots,
       reviewer,
-      cache,
-      rules: deps.rules,
-      reader: deps.reader,
       riskBar: config.riskBar,
-      concurrency: config.review.concurrency,
       telemetry,
-      onChunks: (root, chunks, skips) => void publishChunks(new Map([[root, { chunks, skips }]])),
-      onReviewing: (root, _path, chunks) => {
-        let next = state.chunks
-        for (const chunk of chunks) {
-          inFlight.add(chunk.key)
-          failed.delete(chunk.key)
-          next = markAnalyzing(next, boardKey(root, chunk.key))
+      reviewedHash: (root, path) => reviews.get(noteFileKey(root, path))?.fileHash,
+      onReviewing: (root, paths) => {
+        if (!live()) return
+        for (const path of paths) {
+          reviewing.add(noteFileKey(root, path))
+          failed.delete(noteFileKey(root, path))
         }
-        update({ chunks: next })
+        render()
       },
-      onReviewed: (root, path, chunks, findings) => {
-        const { byChunk, fileLevel } = assignFindings(path, chunks, findings)
-        let next = state.chunks
-        for (const chunk of chunks) {
-          inFlight.delete(chunk.key)
-          failed.delete(chunk.key)
-          const own = byChunk.get(chunk.key) ?? []
-          next = markReady(next, boardKey(root, chunk.key), {
-            riskLevel: levelOf(own),
-            findings: own,
-          })
+      onReviewed: (root, stored) => {
+        if (!live()) return
+        for (const entry of stored) {
+          reviews.set(noteFileKey(root, entry.path), entry)
+          reviewing.delete(noteFileKey(root, entry.path))
         }
-        const others = state.fileFindings.filter(
-          (entry) => entry.root !== root || entry.path !== path,
-        )
-        update({
-          chunks: next,
-          fileFindings:
-            fileLevel.length === 0 ? others : [...others, { root, path, findings: fileLevel }],
-        })
+        render()
+        deps.findings.put(sessionId, stored).catch(persistFailed)
       },
-      onFailed: (_root, _path, chunks, message) => {
-        for (const chunk of chunks) {
-          inFlight.delete(chunk.key)
-          failed.set(chunk.key, message)
+      onFailed: (root, paths, message) => {
+        if (!live()) return
+        for (const path of paths) {
+          reviewing.delete(noteFileKey(root, path))
+          failed.set(noteFileKey(root, path), message)
         }
-        update({ chunks: markFailed(state.chunks, failed) })
+        render()
       },
     })
   }, backgroundFailure('The review'))
+
+  /** The live root's tree right now, or null when there is none or it cannot be read — the
+   *  before and after of a turn, to tell whether it changed anything. */
+  const treeNow = async (): Promise<SnapshotId | null> => {
+    const handle = deps.roots.knownRoots()[0]
+    if (handle === undefined) return null
+    return handle.snapshots.capture().catch(() => null)
+  }
+
+  /** Review what a turn changed, if it changed anything. */
+  const reviewIfChanged = async (before: SnapshotId | null): Promise<void> => {
+    const after = await treeNow()
+    if (after !== null && after !== before) startReview()
+  }
 
   /** `refreshAnnotations` and `refreshHidden`, for the edit path, where changes arrive in
    *  bursts. */
@@ -349,11 +366,10 @@ export function createSession(deps: SessionDeps): Session {
     await refreshHidden()
   }, backgroundFailure('Refreshing notes'))
 
-  /** The tree may have changed — re-derive the board and background analysis, and let the diff
-   *  pane know to refetch. */
+  /** The tree may have changed — re-derive the board, and let the diff pane know to refetch.
+   *  Not the review: that waits for the turn to end (`turn`), or for the human (`reviewNow`). */
   function afterPossibleEdit(): void {
     refreshBoard()
-    startReview()
     clearStaleNotes()
     deps.onEdit?.()
     update({ diffRevision: state.diffRevision + 1 })
@@ -447,8 +463,7 @@ export function createSession(deps: SessionDeps): Session {
     // An agent can change files without going through the write tool — Bash (`sed`, a
     // heredoc), `NotebookEdit`, an MCP tool, a subagent — so any finished tool call that is not
     // a plain read, failed ones too (they can touch files before erroring), is the signal to
-    // re-read the tree. Cheap: the board is a git snapshot, and the review is cached by
-    // content and coalesced.
+    // re-read the tree. Cheap: the board is a git snapshot, coalesced.
     if (
       event.kind === 'tool' &&
       event.toolKind !== 'read' &&
@@ -620,6 +635,8 @@ export function createSession(deps: SessionDeps): Session {
     deps.roots.deactivate()
     abandonPlanReview('This session was left before the plan was answered.')
     planRound = 0
+    boards.clear()
+    clearReviews()
     update({
       sessionId,
       roots: [],
@@ -683,10 +700,12 @@ export function createSession(deps: SessionDeps): Session {
       transcript: appendNotice(state.transcript, notice, new Date().toISOString()),
       diffRevision: state.diffRevision + 1,
     })
+    // Its last review comes back with it, for every file that has not changed since. The rest
+    // read "not reviewed" until a turn changes something or the human asks (`reviewNow`).
+    await loadReviews()
     await refreshChunks()
     await refreshAnnotations()
     await refreshHidden()
-    startReview()
   }
 
   /** Prepare the first session, or record why none can be opened. */
@@ -892,6 +911,14 @@ export function createSession(deps: SessionDeps): Session {
     async showFile(file): Promise<void> {
       await hidden.show(state.sessionId, file.root, file.path)
       await refreshHidden()
+    },
+
+    reviewNow(): void {
+      if (state.sessionId === '') return
+      void (async () => {
+        await refreshChunks()
+        startReview()
+      })()
     },
 
     async enterPlanMode(): Promise<void> {
@@ -1275,6 +1302,10 @@ export function createSession(deps: SessionDeps): Session {
 
     await markDelivered(notes)
 
+    // The tree before the agent acts, so the end of the turn can tell whether it changed
+    // anything — and only then pay for a review.
+    const before = await treeNow()
+
     let stopReason: string
     try {
       stopReason = await current.prompt(promptWith(notes, text))
@@ -1293,6 +1324,8 @@ export function createSession(deps: SessionDeps): Session {
         transcript: appendNotice(state.transcript, message, new Date().toISOString(), 'bad'),
       })
       await refreshChunks()
+      // What it changed before it failed is still work on the board.
+      await reviewIfChanged(before)
       return
     }
 
@@ -1303,7 +1336,7 @@ export function createSession(deps: SessionDeps): Session {
     }
 
     await refreshChunks()
-    startReview()
+    await reviewIfChanged(before)
     await refreshAnnotations()
     await refreshHidden()
     update({ status: 'idle', diffRevision: state.diffRevision + 1 })

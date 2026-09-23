@@ -304,7 +304,7 @@ function bandFor(chunk: LiveChunk): BandInfo {
   }
   const reading = chunk.status === 'analyzing'
   if (chunk.analysis === null) {
-    // A pending chunk with a reason had its last review fail; it is retried on the next change.
+    // A pending chunk with a reason had its last review fail; "Review now" tries it again.
     if (chunk.status === 'pending' && chunk.reason !== null) {
       return {
         tone: 'none',
@@ -316,7 +316,7 @@ function bandFor(chunk: LiveChunk): BandInfo {
     }
     return {
       tone: 'none',
-      label: reading ? 'reading' : 'queued',
+      label: reading ? 'reading' : 'not reviewed yet',
       reading,
       reason: '',
       findings: [],

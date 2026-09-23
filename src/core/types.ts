@@ -124,8 +124,8 @@ export type Chunk = {
 export type Severity = 'low' | 'medium' | 'high'
 
 /**
- * One place a change breaks a rule — in the reviewed file, or in another file it breaks (a
- * caller, a test). Built from the reviewer's typed verdicts (`core/verdicts.ts`).
+ * One problem the reviewer found — in a changed file, or in another file the change breaks (a
+ * caller, a test). Written by the reviewer (`adapters/agent-sdk/reviewer.ts`).
  */
 export type Finding = {
   path: string
@@ -133,9 +133,9 @@ export type Finding = {
   startLine: number
   endLine: number
   severity: Severity
-  /** The name of the rule it breaks (`Rule.name`). */
-  rule: string
-  /** The rule's `description`: what it asks for. The reviewer judges; it writes nothing. */
+  /** A short label for the problem, the way a reviewer would title a comment. */
+  title: string
+  /** What is wrong and why it matters, in the reviewer's words. */
   message: string
 }
 
@@ -148,9 +148,20 @@ export type ChunkAnalysis = {
   findings: Finding[]
 }
 
-/** What is cached for one reviewed file. */
-export type FileReview = {
+/**
+ * One changed file's last review, as it stood when it was reviewed.
+ *
+ * `fileHash` is the file's `contentHash` at the moment the review started: the review is current
+ * only while the file still hashes the same, and any change after that — the agent's, your own,
+ * another session's, a checkout — makes it stale, so the file reads "not reviewed" rather than
+ * showing findings about lines that are no longer there. No findings is still a review.
+ */
+export type StoredReview = {
+  root: string
+  path: string
+  fileHash: string
   findings: Finding[]
+  reviewedAt: string
 }
 
 /** Findings on a changed file that do not land on any of its chunks. */
@@ -537,7 +548,7 @@ export type LiveChunk = {
   key: string
   /**
    * The bare storage identity — what `chunkKey()` actually computed, before `boardKey` folded
-   * `root` in — what the analysis cache is keyed by. `boardKey` is one-way, so this is not
+   * `root` in. `boardKey` is one-way, so this is not
    * recoverable from `key` alone.
    */
   contentKey: string

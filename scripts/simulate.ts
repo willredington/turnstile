@@ -116,16 +116,20 @@ const CHUNKS: LiveChunk[] = [
           startLine: 44,
           endLine: 46,
           severity: 'high',
-          rule: 'comment-only-means-comments',
-          message: 'A diff counts as comment-only only when it changes nothing but comments',
+          title: 'Comment check ignores string contents',
+          message:
+            'A `//` inside a string literal is read as a comment, so a change that edits a URL ' +
+            'in a string is skipped as comment-only and never reviewed.',
         },
         {
           path: 'src/core/risk.ts',
           startLine: 52,
           endLine: 52,
           severity: 'medium',
-          rule: 'core-stays-pure',
-          message: 'core/ does no I/O',
+          title: 'File read in core',
+          message:
+            '`readFileSync` here puts I/O in core/, which the architecture test forbids — the ' +
+            'build fails on it.',
         },
       ],
     },
@@ -142,7 +146,8 @@ const CHUNKS: LiveChunk[] = [
     path: 'src/app/gate.ts',
     startLine: 12,
     endLine: 20,
-    status: 'analyzing',
+    // Changed since its last review — what "Review now" is for.
+    status: 'pending',
     analysis: null,
   }),
   chunk({
@@ -637,6 +642,23 @@ const fakeSession: Session = {
   },
   hideFile: async (file: FileRef) => {
     commit({ hidden: [...state.hidden, file] })
+  },
+  // Every unreviewed chunk goes under review, and a moment later comes back clean.
+  reviewNow: () => {
+    commit({
+      chunks: state.chunks.map((chunk) =>
+        chunk.status === 'pending' ? { ...chunk, status: 'analyzing', reason: null } : chunk,
+      ),
+    })
+    setTimeout(() => {
+      commit({
+        chunks: state.chunks.map((chunk) =>
+          chunk.status === 'analyzing' && chunk.analysis === null
+            ? { ...chunk, status: 'ready', analysis: { riskLevel: 'none', findings: [] } }
+            : chunk,
+        ),
+      })
+    }, 1500)
   },
   showFile: async (file: FileRef) => {
     commit({

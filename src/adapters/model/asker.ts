@@ -6,8 +6,7 @@ import { ASK_SYSTEM_PROMPT } from './prompts.ts'
 import { readOnlyTools } from './tools.ts'
 
 /**
- * One answer per question: the same shape as the reviewer, minus the part that makes it a
- * reviewer.
+ * One answer per question, from a model with read-only tools.
  *
  * No terminal tool and no schema — an answer is prose, and forcing it through a tool call would
  * buy nothing a plain response does not already give. It stops on the step cap alone, and the
@@ -24,9 +23,8 @@ const ANSWER_NOW =
 export function createModelAsker(model: LanguageModel, config: AskConfig): Asker {
   return {
     ask: async ({ payload, reader, root }) => {
-      // One deadline across both attempts, rather than the reviewer's fresh timeout per try.
-      // A review runs unattended and can afford to spend its budget twice; someone is watching
-      // this one, and a retry that turns a 60-second wait into a 120-second one is worse than
+      // One deadline across both attempts, rather than a fresh timeout per try. Someone is
+      // watching this, and a retry that turns a 60-second wait into a 120-second one is worse than
       // the failure it is trying to paper over. A transient error still gets its second go.
       const deadline = AbortSignal.timeout(config.timeoutMs)
 

@@ -43,8 +43,8 @@ const SEVERITY_TONE: Record<Finding['severity'], BandInfo['tone']> = {
   low: 'low',
 }
 
-/** Review findings, each with its severity, the rule it breaks, where it is and what the rule
- *  asks for. */
+/** Review findings, each with its severity, its title, where it is and what the reviewer says
+ *  is wrong. */
 export function FindingList({
   findings,
   path,
@@ -64,7 +64,7 @@ export function FindingList({
           // biome-ignore lint/suspicious/noArrayIndexKey: findings have no identity of their own, and the list is replaced whole.
           <li key={index} className="finding">
             <span className={`sev sev-${SEVERITY_TONE[finding.severity]}`}>{finding.severity}</span>
-            <span className="finding-rule">{finding.rule}</span>
+            <span className="finding-title">{finding.title}</span>
             <span className="finding-where">
               {finding.path === path ? `line ${lines}` : `${finding.path}:${lines}`}
             </span>

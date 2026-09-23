@@ -4,11 +4,9 @@ import { numbered } from '../../core/numbering.ts'
 import type { RepoReader } from '../../core/ports.ts'
 
 /**
- * The read-only tools both model agents get: read a file, list by glob, search by regex.
+ * The asker's read-only tools: read a file, list by glob, search by regex.
  *
- * Shared so that "what a model of ours may do to a repository" has one answer in one place.
- * There is no write tool here to withhold — the reviewer and the asker are read-only by
- * construction, not by a deny-list that could be forgotten. Every result is capped by the
+ * There is no write tool here to withhold — the asker is read-only by construction, not by a deny-list that could be forgotten. Every result is capped by the
  * `RepoReader` itself, so a careless query costs a truncated answer rather than an enormous
  * prompt.
  */

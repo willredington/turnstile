@@ -148,7 +148,7 @@ export function CodeDocument({
 
   // `findingsKey` stands in for `fileFindings` the way `shape` does for `regions`: the review
   // rebuilds the array on every poll, but what it holds settles early.
-  const findingsKey = fileFindings.map((f) => `${f.rule}:${f.startLine}`).join('|')
+  const findingsKey = fileFindings.map((f) => `${f.title}:${f.startLine}`).join('|')
 
   // `shape` stands in for `regions`, whose array identity changes every render but whose
   // contents almost never do.

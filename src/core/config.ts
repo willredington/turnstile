@@ -1,8 +1,8 @@
 import { z } from 'zod'
 
 /**
- * Review policy. This is domain data, not infrastructure — the risk bar and the gate
- * both read it — so the schema lives in core and only *loading* it is an adapter.
+ * Turnstile's configuration. This is domain data, not infrastructure — the risk bar and the
+ * review both read it — so the schema lives in core and only *loading* it is an adapter.
  */
 
 const ProviderPrefsSchema = z.object({
@@ -40,34 +40,22 @@ export type RiskBarConfig = z.infer<typeof RiskBarConfigSchema>
 
 const ReviewConfigSchema = z.object({
   /**
-   * Tool-using steps one file review may take before it must submit its verdicts. Judging every
-   * rule can mean grepping a changed export's callers or finding a test file, several times over.
+   * The Claude model the reviewer runs on — an alias (`sonnet`, `opus`) or a full id. Unset, it
+   * is whatever the `claude` CLI defaults to. The reviewer is Claude Code itself, authenticated
+   * the way the coding agent is; it does not go through OpenRouter.
    */
-  maxSteps: z.number().int().min(1).max(50).default(16),
-  /** Files reviewed at once. */
-  concurrency: z.number().int().min(1).max(16).default(3),
-  /** One file review's whole budget, tool calls included. */
-  timeoutMs: z.number().int().min(1000).default(90_000),
-  /**
-   * Where this repository's rules live, when not the default `~/.turnstile/rules/<repo>/`
-   * (`core/rules.ts`'s `defaultRulesDir`). Absolute, or starting `~/`. Must be outside the
-   * checkout: the coding agent is not meant to see the rules its work is reviewed against.
-   */
-  rulesDir: z
-    .string()
-    .refine((dir) => dir.startsWith('/') || dir.startsWith('~/'), {
-      message: 'must be an absolute path or start with ~/',
-    })
-    .optional(),
+  model: z.string().min(1).optional(),
+  /** Model round-trips one review may take — every read, search and command counts. */
+  maxTurns: z.number().int().min(1).max(500).default(60),
+  /** One review's whole budget. It reads every file a turn changed, so it is not quick. */
+  timeoutMs: z.number().int().min(1000).default(600_000),
 })
 export type ReviewConfig = z.infer<typeof ReviewConfigSchema>
 
 const AskConfigSchema = z.object({
   /**
-   * The model behind an answer. Its own key rather than the reviewer's, because the two jobs
-   * are priced differently: a review runs unattended on every changed file and is worth a
-   * capable model, while a question is asked by someone waiting for it and wants a fast cheap
-   * one. Must support tool calling.
+   * The model behind an answer, over OpenRouter: a question is asked by someone waiting for it,
+   * and wants a fast, cheap model. Must support tool calling.
    */
   model: ModelConfigSchema,
   /** Tool-using steps one answer may take before it must answer with what it has. */
@@ -136,12 +124,8 @@ const TelemetryConfigSchema = z.object({
 export type TelemetryConfig = z.infer<typeof TelemetryConfigSchema>
 
 export const ConfigSchema = z.object({
-  /**
-   * The model behind the review — one tool-using run per changed file, returning a verdict on
-   * every rule that governs it. It must support tool calling.
-   */
-  model: ModelConfigSchema,
-  review: ReviewConfigSchema.default({ maxSteps: 16, concurrency: 3, timeoutMs: 90_000 }),
+  /** The reviewer: a read-only Claude Code run over the files each turn changed. */
+  review: ReviewConfigSchema.default({ maxTurns: 60, timeoutMs: 600_000 }),
   /** The model behind "highlight some code and ask about it". Read-only, and never the agent. */
   ask: AskConfigSchema.default({
     model: { models: ['anthropic/claude-haiku-4.5'], temperature: 0 },
@@ -179,9 +163,7 @@ export const ConfigSchema = z.object({
 
 export type TurnstileConfig = z.infer<typeof ConfigSchema>
 
-export const DEFAULT_CONFIG: TurnstileConfig = ConfigSchema.parse({
-  model: { models: ['meta/muse-spark-1.1'], temperature: 0 },
-})
+export const DEFAULT_CONFIG: TurnstileConfig = ConfigSchema.parse({})
 
 /** Turnstile's own state directory, excluded from every delta. */
 export const STATE_DIR = '.turnstile'

@@ -2119,6 +2119,26 @@ button:disabled {
   padding-bottom: 8px;
 }
 
+.review-rail-action {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 10px 8px 12px;
+}
+
+.review-rail-action-text {
+  flex: 1;
+  min-width: 0;
+  font: 12px / 1.4 var(--font-body);
+  color: var(--color-neutral-500);
+}
+
+.review-rail-action-button {
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
 .review-rail-empty {
   margin: 0;
   padding: 10px 12px;
@@ -3358,10 +3378,9 @@ button:disabled {
   gap: 4px 8px;
 }
 
-/* The rule's own name, which is the repository's vocabulary rather than the reviewer's prose —
-   so it is tinted as chrome (green) and not as severity. The severity badge beside it is the
-   thing that is allowed to be red. */
-.finding-rule {
+/* The finding's title, tinted as chrome (green) and not as severity. The severity badge beside
+   it is the thing that is allowed to be red. */
+.finding-title {
   font: 12px / 1.4 var(--mono);
   color: var(--color-accent-2);
   background: rgb(var(--accent-rgb) / 12%);

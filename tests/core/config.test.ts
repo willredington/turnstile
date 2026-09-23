@@ -32,25 +32,25 @@ describe('loadConfig', () => {
    * changed — and the only symptom was an unrelated-looking test failure.
    */
   test('the no-config fallback is the declared default, not a second copy of it', async () => {
-    expect((await loadConfig(dir, home)).model.models).toEqual(DEFAULT_CONFIG.model.models)
+    expect((await loadConfig(dir, home)).ask.model.models).toEqual(DEFAULT_CONFIG.ask.model.models)
   })
 
   /** Same claim on the same delta twice, or the human cannot tell a new challenge
    * from a resampled one. */
   test('defaults to a deterministic temperature', async () => {
-    expect(DEFAULT_CONFIG.model.temperature).toBe(0)
+    expect(DEFAULT_CONFIG.ask.model.temperature).toBe(0)
   })
 
   test('reads a user config', async () => {
     await Bun.write(
       join(dir, '.turnstile/config.json'),
       JSON.stringify({
-        model: { models: ['anthropic/claude-sonnet-5'] },
+        review: { model: 'opus' },
         openrouter: { apiKeyEnv: 'MY_KEY' },
       }),
     )
     const config = await loadConfig(dir, home)
-    expect(config.model.models).toEqual(['anthropic/claude-sonnet-5'])
+    expect(config.review.model).toBe('opus')
     expect(config.openrouter.apiKeyEnv).toBe('MY_KEY')
   })
 
@@ -63,7 +63,6 @@ describe('loadConfig', () => {
     await Bun.write(
       join(dir, '.turnstile/config.json'),
       JSON.stringify({
-        model: { models: ['x'] },
         reviewTimeoutMs: 60000,
         riskBar: { advisor: { enabled: true } },
       }),
@@ -78,7 +77,6 @@ describe('loadConfig', () => {
     await Bun.write(
       join(dir, '.turnstile/config.json'),
       JSON.stringify({
-        model: { models: ['x'] },
         typesafe: { model: 'jev-latest' },
         review: { threshold: 0.5 },
       }),
@@ -89,10 +87,7 @@ describe('loadConfig', () => {
   })
 
   test('fills unspecified sections with defaults', async () => {
-    await Bun.write(
-      join(dir, '.turnstile/config.json'),
-      JSON.stringify({ model: { models: ['x'] } }),
-    )
+    await Bun.write(join(dir, '.turnstile/config.json'), JSON.stringify({}))
     const config = await loadConfig(dir, home)
     expect(config.riskBar).toEqual({
       alwaysReview: [],
@@ -113,14 +108,17 @@ describe('loadConfig', () => {
   })
 
   test('throws with a path-prefixed detail on a schema violation', async () => {
-    await Bun.write(join(dir, '.turnstile/config.json'), JSON.stringify({ model: { models: [] } }))
-    await expect(loadConfig(dir, home)).rejects.toThrow('model.models')
+    await Bun.write(
+      join(dir, '.turnstile/config.json'),
+      JSON.stringify({ ask: { model: { models: [] } } }),
+    )
+    await expect(loadConfig(dir, home)).rejects.toThrow('ask.model.models')
   })
 
   test('rejects an empty API key variable name', async () => {
     await Bun.write(
       join(dir, '.turnstile/config.json'),
-      JSON.stringify({ model: { models: ['x'] }, openrouter: { apiKeyEnv: '' } }),
+      JSON.stringify({ openrouter: { apiKeyEnv: '' } }),
     )
     await expect(loadConfig(dir, home)).rejects.toThrow('openrouter.apiKeyEnv')
   })
@@ -128,7 +126,7 @@ describe('loadConfig', () => {
   test('rejects an invalid deny-pattern regex', async () => {
     await Bun.write(
       join(dir, '.turnstile/config.json'),
-      JSON.stringify({ model: { models: ['x'] }, toolPermissions: { denyPatterns: ['('] } }),
+      JSON.stringify({ toolPermissions: { denyPatterns: ['('] } }),
     )
     await expect(loadConfig(dir, home)).rejects.toThrow('toolPermissions.denyPatterns')
   })
@@ -138,10 +136,10 @@ describe('user-level config', () => {
   test('is read when the repo has none', async () => {
     await Bun.write(
       join(home, '.turnstile/config.json'),
-      JSON.stringify({ model: { models: ['personal-default'] } }),
+      JSON.stringify({ review: { model: 'personal-default' } }),
     )
     const config = await loadConfig(dir, home)
-    expect(config.model.models).toEqual(['personal-default'])
+    expect(config.review.model).toBe('personal-default')
   })
 
   /**
@@ -152,16 +150,16 @@ describe('user-level config', () => {
     await Bun.write(
       join(home, '.turnstile/config.json'),
       JSON.stringify({
-        model: { models: ['personal-model'] },
+        review: { model: 'personal-model' },
         openrouter: { apiKeyEnv: 'PERSONAL_KEY' },
       }),
     )
     await Bun.write(
       join(dir, '.turnstile/config.json'),
-      JSON.stringify({ model: { models: ['repo-model'] } }),
+      JSON.stringify({ review: { model: 'repo-model' } }),
     )
     const config = await loadConfig(dir, home)
-    expect(config.model.models).toEqual(['repo-model'])
+    expect(config.review.model).toBe('repo-model')
     expect(config.openrouter.apiKeyEnv).toBe('PERSONAL_KEY')
   })
 
@@ -172,11 +170,11 @@ describe('user-level config', () => {
   test('an array the repo sets replaces the user config array rather than concatenating', async () => {
     await Bun.write(
       join(home, '.turnstile/config.json'),
-      JSON.stringify({ model: { models: ['x'] }, riskBar: { neverReview: ['personal/**'] } }),
+      JSON.stringify({ riskBar: { neverReview: ['personal/**'] } }),
     )
     await Bun.write(
       join(dir, '.turnstile/config.json'),
-      JSON.stringify({ model: { models: ['x'] }, riskBar: { neverReview: ['repo/**'] } }),
+      JSON.stringify({ riskBar: { neverReview: ['repo/**'] } }),
     )
     const config = await loadConfig(dir, home)
     expect(config.riskBar.neverReview).toEqual(['repo/**'])
@@ -186,13 +184,12 @@ describe('user-level config', () => {
     await Bun.write(
       join(home, '.turnstile/config.json'),
       JSON.stringify({
-        model: { models: ['x'] },
         toolPermissions: { denyPatterns: ['^personal$'] },
       }),
     )
     await Bun.write(
       join(dir, '.turnstile/config.json'),
-      JSON.stringify({ model: { models: ['x'] }, toolPermissions: { denyPatterns: ['^repo$'] } }),
+      JSON.stringify({ toolPermissions: { denyPatterns: ['^repo$'] } }),
     )
     const config = await loadConfig(dir, home)
     expect(config.toolPermissions.denyPatterns).toEqual(['^repo$'])
@@ -204,16 +201,27 @@ describe('user-level config', () => {
   })
 })
 
-describe('model', () => {
-  test('defaults to a fast model', () => {
-    expect(DEFAULT_CONFIG.model.models).toEqual(['meta/muse-spark-1.1'])
-  })
-})
-
 describe('review', () => {
-  /** Judging every rule can take several greps and reads per rule; 8 steps ran short. */
-  test('gives the reviewer 16 steps by default', () => {
-    expect(DEFAULT_CONFIG.review.maxSteps).toBe(16)
+  test('runs on the claude CLI’s own default model unless one is named', () => {
+    expect(DEFAULT_CONFIG.review.model).toBeUndefined()
+  })
+
+  test('has a whole-review budget by default', () => {
+    expect(DEFAULT_CONFIG.review).toMatchObject({ maxTurns: 60, timeoutMs: 600_000 })
+  })
+
+  /**
+   * The review used to run on an OpenRouter model against YAML rules. A config written for it
+   * must still load — refusing it would stop a project over settings that no longer mean
+   * anything.
+   */
+  test('ignores settings from the rule-based reviewer', () => {
+    const parsed = ConfigSchema.parse({
+      model: { models: ['meta/muse-spark-1.1'] },
+      review: { maxSteps: 16, concurrency: 3, rulesDir: '~/rules', timeoutMs: 90_000 },
+    })
+    expect(parsed.review).toEqual({ maxTurns: 60, timeoutMs: 90_000 })
+    expect('model' in parsed).toBe(false)
   })
 })
 
@@ -224,7 +232,6 @@ describe('specPaths', () => {
 
   test('accepts custom glob patterns', () => {
     const parsed = ConfigSchema.parse({
-      model: { models: ['x'] },
       riskBar: { specPaths: ['docs/specs/**/*.md'] },
     })
     expect(parsed.riskBar.specPaths).toEqual(['docs/specs/**/*.md'])
@@ -238,7 +245,6 @@ describe('toolPermissions', () => {
 
   test('accepts valid regex strings', () => {
     const parsed = ConfigSchema.parse({
-      model: { models: ['x'] },
       toolPermissions: { denyPatterns: ['^WebFetch$', 'rm -rf'] },
     })
     expect(parsed.toolPermissions.denyPatterns).toEqual(['^WebFetch$', 'rm -rf'])
@@ -247,7 +253,6 @@ describe('toolPermissions', () => {
   test('rejects an invalid regex string', () => {
     expect(() =>
       ConfigSchema.parse({
-        model: { models: ['x'] },
         toolPermissions: { denyPatterns: ['('] },
       }),
     ).toThrow()

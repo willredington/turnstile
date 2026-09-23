@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { annotationsPath } from '../adapters/fs/annotations.ts'
 import { configPath, userConfigPath } from '../adapters/fs/config.ts'
+import { findingsPath } from '../adapters/fs/findings.ts'
 import { hiddenPath } from '../adapters/fs/hidden.ts'
 import { DEFAULT_CONFIG, STATE_DIR } from '../core/config.ts'
 import { runApp } from './app.ts'
@@ -11,21 +12,22 @@ const USAGE = `turnstile — see everything a coding agent changed, and send it 
 
   turnstile                    Open the app. This is the normal way to use Turnstile.
   turnstile init                Write .turnstile/config.json.
-  turnstile reset               Forget every note and reviewed mark.
+  turnstile reset               Forget every note, reviewed mark and review.
 `
 
 /**
- * What `reset` removes: the notes, the hidden files, and state files earlier versions of Turnstile wrote that
- * nothing reads any more (review decisions, per-run counters, the advisor's pass log, decided
- * diffs).
+ * What `reset` removes: the notes, the hidden files, the stored reviews, and state files earlier
+ * versions of Turnstile wrote that nothing reads any more (review decisions, per-run counters,
+ * the advisor's pass log, the per-file review cache).
  */
 const RESET_PATHS = (cwd: string): string[] => [
   annotationsPath(cwd),
   hiddenPath(cwd),
+  findingsPath(cwd),
   join(cwd, STATE_DIR, 'reviewed.json'),
   join(cwd, STATE_DIR, 'state.json'),
   join(cwd, STATE_DIR, 'passed.jsonl'),
-  join(cwd, STATE_DIR, 'cache', 'decided'),
+  join(cwd, STATE_DIR, 'cache'),
 ]
 
 /**
@@ -84,7 +86,7 @@ async function main(): Promise<number> {
 
     case 'reset': {
       for (const path of RESET_PATHS(cwd)) await rm(path, { recursive: true, force: true })
-      process.stdout.write('Forgot every note and reviewed mark.\n')
+      process.stdout.write('Forgot every note, reviewed mark and review.\n')
       return 0
     }
 

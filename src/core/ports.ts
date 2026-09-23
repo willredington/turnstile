@@ -1,13 +1,10 @@
-import type { ContextDoc, Rule } from './rules.ts'
 import type {
   AgentEvent,
   Annotation,
   BaselineSource,
-  Chunk,
   DiffView,
   FileDelta,
   FileRef,
-  FileReview,
   Finding,
   HiddenFile,
   PatchKind,
@@ -16,6 +13,7 @@ import type {
   SessionState,
   SessionSummary,
   SnapshotId,
+  StoredReview,
 } from './types.ts'
 
 /**
@@ -277,6 +275,12 @@ export interface Session {
   /** Bring a hidden file back before it changes. */
   showFile(file: FileRef): Promise<void>
   /**
+   * Review every changed file with no current review — never reviewed, or changed since. The
+   * review otherwise runs only at the end of a turn that changed something, so this is how the
+   * board catches up with changes made any other way: by hand, a checkout, another session.
+   */
+  reviewNow(): void
+  /**
    * Restrict the agent to planning — no tool execution — until a submitted plan is approved or
    * plan mode is explicitly exited. Refuses mid-turn, the same way `newSession` does.
    */
@@ -353,32 +357,35 @@ export interface SnapshotStore {
 }
 
 /**
- * Judges ONE changed file against every rule that governs it (`adapters/model/reviewer.ts`).
+ * Reviews the files a session changed, in one pass (`adapters/agent-sdk/reviewer.ts`).
  *
- * Per file rather than per chunk, and with the rest of the repository in reach through
- * `reader`: whether a change breaks a rule often turns on something outside the changed lines —
- * a caller, a test, the sibling it should have followed. It answers each rule with a typed
- * verdict (`core/verdicts.ts`), and every finding is a place a rule was judged broken.
+ * A standard review by a read-only coding agent, run in the checkout, so the repository's own
+ * conventions — its `CLAUDE.md`, its skills — are what it reviews against. It sees every file
+ * under review at once, with the rest of the repository in reach, since whether a change is
+ * right often turns on something outside it: a caller, a test, the sibling it should have
+ * followed.
  */
 export interface Reviewer {
-  reviewFile(input: FileReviewInput): Promise<Finding[]>
+  /**
+   * Every path in `input.files` has an entry in the result, empty when the reviewer found
+   * nothing — a review with no findings is still a review. A finding may sit in any file (a
+   * caller the change broke); it is listed under the reviewed file whose change caused it.
+   */
+  review(input: ReviewInput): Promise<Map<string, Finding[]>>
 }
 
-export type FileReviewInput = {
+export type ReviewInput = {
   root: string
+  /** The changed files to review. Never empty. */
+  files: ReviewedFile[]
+  /** Their unified diff against the session's baseline — possibly truncated, and saying so. */
+  diff: string
+}
+
+export type ReviewedFile = {
   path: string
   previousPath?: string
   kind: PatchKind
-  /** The file as it stands now, or null when it was deleted. */
-  content: string | null
-  /** This file's chunks, in order — what changed. */
-  chunks: Chunk[]
-  /** The rules governing this file (`rulesFor`). Never empty: no rules, no review. */
-  rules: Rule[]
-  /** `CLAUDE.md`/`AGENTS.md` and the like that apply to it (`contextFor`). Background only. */
-  context: ContextDoc[]
-  /** The rest of the repository, read-only. */
-  reader: RepoReader
 }
 
 /**
@@ -386,9 +393,9 @@ export type FileReviewInput = {
  *
  * Deliberately not the coding agent. Two reasons, and both matter: it cannot answer while it is
  * mid-turn — which is exactly when you are reading its output and want to ask — and a question
- * about the work is not the work, so it should not cost the agent's context window. It gets the
- * same read-only `RepoReader` the reviewer does, so an answer can check a caller or a type
- * definition instead of guessing from the selection alone.
+ * about the work is not the work, so it should not cost the agent's context window. It gets a
+ * read-only `RepoReader`, so an answer can check a caller or a type definition instead of
+ * guessing from the selection alone.
  *
  * Read-only by construction: the implementation is given read tools and no others, rather than
  * being given write tools and told not to use them.
@@ -405,26 +412,10 @@ export type AskRequest = {
   reader: RepoReader
 }
 
-/** The repository's review rules and context docs (`adapters/fs/rules.ts`). */
-export interface RuleSource {
-  load(root: string): Promise<LoadedRules>
-}
-
-export type LoadedRules = {
-  rules: Rule[]
-  context: ContextDoc[]
-  /**
-   * Files in the rules directory that are not rules: ones that failed to parse or validate, and
-   * rule files in a format no longer read. Each is skipped on its own, so one bad file never
-   * takes the others down with it — and each is reported, so none of them silently stops applying.
-   */
-  warnings: string[]
-}
-
 export type GrepMatch = { path: string; line: number; text: string }
 
 /**
- * A read-only view of the repository, for the reviewer's and the asker's tools (`adapters/fs/repoReader.ts`).
+ * A read-only view of the repository, for the asker's tools (`adapters/fs/repoReader.ts`).
  * Every path is relative to `root` and refused if it leaves it; every result is capped, so a
  * careless query costs a truncated answer, never an enormous prompt.
  */
@@ -439,21 +430,14 @@ export interface RepoReader {
 }
 
 /**
- * Finished file reviews, keyed by `reviewKey` — the file's content, its chunks, and the rules
- * and context it was reviewed against. A hit means no model call at all.
+ * Each session's file reviews, so a resumed session shows its last review again
+ * (`adapters/fs/findings.ts`). Keyed by session, like notes; whether a stored review still
+ * applies is the session's call, by its `fileHash`.
  */
-export interface AnalysisCache {
-  get(key: string): Promise<FileReview | null>
-  put(key: string, review: FileReview): Promise<void>
-  /**
-   * Take exclusive responsibility for computing a key, so rapid edits do not stack
-   * duplicate workers on it. Best-effort: a lost claim costs duplicated work, never
-   * correctness.
-   */
-  claim(key: string): Promise<boolean>
-  release(key: string): Promise<void>
-  /** Drop everything not in `keepKeys`, so reverted work does not accumulate forever. */
-  prune(keepKeys: string[]): Promise<void>
+export interface FindingStore {
+  bySession(sessionId: string): Promise<StoredReview[]>
+  /** Store these reviews, replacing any earlier one for the same session, root and path. */
+  put(sessionId: string, reviews: StoredReview[]): Promise<void>
 }
 
 /**

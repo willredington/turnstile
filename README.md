@@ -5,12 +5,13 @@ rubber-stamping an agent's changes without actually processing them.
 
 Turnstile *is* the client the agent talks to. It drives Claude Code directly through the
 Claude Agent SDK (no separate proxy process in between), runs it right in your checkout, and
-shows you everything that session has changed since it started, as it happens,
-each changed file reviewed against your repository's own rules. You read the diff, leave notes on the lines that matter,
+shows you everything that session has changed since it started, as it happens. When a turn
+that changed something ends, a read-only Claude Code reviewer reads those changes against your
+repository's own conventions. You read the diff, leave notes on the lines that matter,
 and send those notes to the agent when you're ready. Nothing blocks: the agent is never held
 waiting for an approval.
 
-![A changed file open in Turnstile: the review rail on the left sorted by risk, the file with its change marked and the rules it breaks, and the conversation below](docs/images/board.png)
+![A changed file open in Turnstile: the review rail on the left sorted by risk, the file with its change marked and what the review found, and the conversation below](docs/images/board.png)
 
 > Turnstile began as a blocking review gate: after every turn the agent waited until you
 > approved or sent back each change. That design was replaced by the one described here.
@@ -21,9 +22,8 @@ Putting an AI summary between you and the code is the same mechanism that *cause
 Turnstile avoids that by keeping the model's output narrow and the reading yours:
 
 1. **The model flags problems, not a verdict.** Each changed file gets a list of findings —
-   usually empty — each one a rule the change breaks, where it breaks it, and how badly. The
-   model writes none of it: it answers every rule true or false, and the rule's own
-   description says what is wrong. Never a summary of what the change does.
+   usually empty — each one a specific problem the change introduces: where it is, how bad it
+   is, and a sentence or two on why. Never a summary of what the change does.
 2. **You read the file, not a digest of it.** A changed file opens as the whole file, top to
    bottom, with its changes marked where they fall. Findings sit beside the code; they never
    replace it.
@@ -41,8 +41,8 @@ These steps assume macOS.
 - **Claude Code, logged in.** Turnstile drives Claude Code through the Claude Agent SDK, which
   spawns the `claude` CLI itself. The CLI authenticates however it normally does: its own login,
   or `ANTHROPIC_API_KEY` in the environment. Turnstile does not manage that.
-- **An OpenRouter API key.** The review and the answers to your questions both use it (see "The
-  review" and "Asking about code" below). The models you pick must support tool calling.
+- **An OpenRouter API key**, for answering questions about code (see "Asking about code" below).
+  The review doesn't use it: it runs on Claude Code, like the agent.
 - **A git repository to work in.** If the folder you pick isn't one, Turnstile offers to create it.
 
 ## Setup
@@ -67,8 +67,8 @@ source ~/.zshrc
 ```
 
 Turnstile reads the key only from the environment, never from a config file. The key is checked
-per request, so a missing one doesn't stop the app from starting. Each review and each question
-fails with an error on screen instead. To use a variable with a different name, set
+per request, so a missing one doesn't stop the app from starting. A question fails with an error
+on screen instead. To use a variable with a different name, set
 `openrouter.apiKeyEnv` in config.
 
 ### 3. Write your user-level config
@@ -81,7 +81,7 @@ locations" below).
 mkdir -p ~/.turnstile
 cat > ~/.turnstile/config.json <<'EOF'
 {
-  "model": { "models": ["anthropic/claude-opus-5"], "temperature": 0 },
+  "review": { "model": "sonnet" },
   "ask": { "model": { "models": ["anthropic/claude-haiku-4.5"], "temperature": 0 } },
   "openrouter": { "apiKeyEnv": "OPENROUTER_API_KEY" }
 }
@@ -92,20 +92,7 @@ Any field you leave out takes its default. "Configuration" below lists every fie
 **won't start** if this file isn't valid JSON or has a bad value, so a typo shows up right away
 instead of being ignored.
 
-### 4. Add at least one rule
-
-The review checks each changed file against your rules, and **a file that no rule covers is
-never reviewed**. Rules live outside the checkout, in
-`~/.turnstile/rules/<repository path with / and . turned into ->/`, one YAML file per rule. For
-a repo at `/Users/me/projects/my-app`:
-
-```bash
-mkdir -p ~/.turnstile/rules/-Users-me-projects-my-app
-```
-
-Turnstile prints the exact directory when it starts. "Rules" below covers the format.
-
-### 5. Install dependencies and run the desktop app
+### 4. Install dependencies and run the desktop app
 
 ```bash
 git clone https://github.com/willredington/turnstile.git
@@ -150,8 +137,8 @@ you type a message
   │  recorded as the session's baseline — before the agent can touch anything
   ├─ the agent works in your checkout
   ├─ every edit lands in the changed-files list immediately (read from git, no model)
-  │    ...and starts that file's review in the background
   └─ the turn ends; the agent is free for your next message
+       ...and if the turn changed anything, one review reads every file without a current one
 ```
 
 Along the way, or afterwards:
@@ -345,29 +332,42 @@ written to `.turnstile/annotations.json`.
 
 ## The review
 
-A model reviews each changed file, shortly after every edit, against **the rules your
-repository writes down**. It is a small agent, not a single prompt: it sees the file's diff, the
-whole file with line numbers, the rules that govern that file, and the repository's
-`CLAUDE.md`/`AGENTS.md`. It can also read, list and search the rest of the repository
-(read-only, never outside the repository), because whether a change keeps a rule often turns on
-something outside the changed lines: a caller the change broke, the test a rule asks for, the
-sibling a rule says to follow.
+When a turn ends having changed something, one reviewer reads **every changed file that has no
+current review** — never reviewed, or changed since it was. It is Claude Code itself, run
+read-only in your checkout: it loads your repository's `CLAUDE.md` and skills exactly the way the
+coding agent does, and those are what it holds the change to. There is no rule file to write.
+If a convention matters, it is already in `CLAUDE.md` or a skill, for the agent to follow and
+the reviewer to check.
 
-Its answer is typed. For **every** rule that governs the file it returns exactly one verdict:
+It sees every file under review at once, with their diff against the baseline, and can read,
+search and run read-only shell commands (`git log`, `grep`, …) across the rest of the repository,
+because whether a change is right often turns on something outside it: a caller the change
+broke, a test that should exist, the sibling it should have followed. It cannot write — no edit
+tools, and a shell command is let through only if it is read-only — and it is kept out of
+Turnstile's own state the same way the agent is.
 
-- **Broken or kept**, true or false.
-- **How badly**, `low`, `medium` or `high`, unless the rule fixes its own severity.
-- **Where**: the lines that break it, in this file or any other.
+Its answer is typed. Each finding is:
 
-It writes no prose. A finding is the rule's name, its `description` as the message, the
-severity, and where. A submission that skips a rule, answers one twice, or names a rule that
-does not govern the file is refused, and handed back to the reviewer to fix within the same run.
-A problem no rule describes is not reported. Rules are the whole mechanism, so anything you want
-caught — security, data loss, a broken build — is written as a rule.
+- **Where**: the lines, in a file under review or any other. A caller the change broke is a
+  finding in the caller, tied to the change that broke it.
+- **How badly**: `low`, `medium` or `high`.
+- **What**: a short title and a sentence or two on what is wrong and why it matters.
 
-Kept is the expected verdict for most rules on most changes: it is told a rule is broken only by
-what the change introduces, never by what the file already did, and not because the code could
-be stricter or cleaner. A file no rule governs is never sent to the model at all.
+An empty list is the expected answer for most changes. It is told to report only what the change
+introduces, never what the code already did, and not something that could merely be cleaner.
+
+**Why only at the end of a turn.** Reviewing work the agent is still in the middle of means
+reviewing something about to change, and each review is a whole agent run. So the list follows
+every edit as it lands, and the review waits for the agent to stop. A turn that changed nothing
+(a question, a plan) is not reviewed at all.
+
+**Stale reviews, and Review now.** A file's review holds only while the file is exactly as it
+was reviewed. Change it any other way — by hand, with a checkout, from another session — and it
+reads **not reviewed** again rather than showing findings about lines that aren't there any
+more. Nothing reviews it until the next turn that changes something, or until you press **Review
+now** at the top of the rail. That button reviews every changed file without a current review,
+and nothing else. Reviews are kept per session in `.turnstile/findings.json`, so resuming a
+session — even after a restart — shows every review that still matches its file.
 
 A finding shows on the change whose lines it overlaps, and a change is as serious as its worst
 finding. Findings outside every change (unchanged code the change affects, or another file it
@@ -381,105 +381,7 @@ reviewed or not, and each one carries the same coloured dot the project tree giv
 group, green once you've marked it reviewed, and no dot at all for a file the agent never touched.
 Closing a tab means "not now" — a changed file keeps its row in the rail either way.
 
-### Rules
-
-The review is an independent check on the coding agent, so **rules live outside the checkout**,
-where the agent won't come across them:
-
-```
-~/.turnstile/rules/<repository path, with / and . turned into ->/
-# e.g. ~/.turnstile/rules/-Users-me-projects-my-app/
-```
-
-Turnstile prints the directory when it starts. To share rules across a team, point
-`review.rulesDir` in config at a checkout of a separate rules repository, using an absolute path
-or `~/…`.
-
-The coding agent is kept out of `~/.turnstile`, the checkout's own `.turnstile/` and any
-configured `rulesDir`, by any means. Tested live, against an agent told to try every route it
-could:
-- **Claude Code's own file tools** (Read, Grep, Glob) are blocked by permission deny rules.
-- **Every Bash command** runs in Claude Code's OS sandbox (Seatbelt on macOS, bubblewrap on
-  Linux), which denies reading or writing those directories. `cat`, `grep -r` from a parent,
-  and `python`/`node` file reads all fail with "Operation not permitted", however the command is
-  phrased.
-- **Anything else that names those paths**, including Turnstile's own write tool, is refused
-  outright.
-
-The sandbox takes away only those directories. The agent can still write anywhere else, and
-network access works: each new host goes through Turnstile's usual permission handling. If a
-command asks to run outside the sandbox, you are asked first. On Linux without bubblewrap the
-sandbox can't start, and only the deny rules and path check apply.
-
-**Keep rules out of git history, too.** A repo whose history ever contained a rules file will
-give it back through `git show`. Rules left in an old `.turnstile/rules/` inside the checkout are ignored, with a
-warning at startup.
-
-A rule is one YAML file in that directory (nested folders are fine; `.yml` works too). The
-file's name is the rule's name:
-
-```yaml
-# validate-request-bodies.yaml
-description: Request bodies are parsed with parseBody
-globs: src/handlers/**/*.ts
-severity: high
-rule: |
-  A handler that accepts a request body takes it as `unknown` and checks it with `parseBody`
-  from `src/lib/validate.ts` before reading any field. See `createUser` in
-  `src/handlers/users.ts` for the pattern.
-violates: Reading a field off a body that has not been through `parseBody`, typing the body
-  parameter as anything but `unknown`, or casting it (`body as Foo`).
-complies: The body is typed `unknown` and passed through `parseBody` before any field is read,
-  or the handler takes no body.
-```
-
-| Field | | |
-| --- | --- | --- |
-| `description` | required | One line: what the rule asks for. It is also the finding's message. |
-| `rule` | required | The rule itself. |
-| `globs` | optional | Which files it governs: one glob or a list. Leave it out to govern every file. |
-| `severity` | optional | `low`, `medium` or `high`. Leave it out and each violation's severity is judged. |
-| `violates` | optional | What counts as breaking it. |
-| `complies` | optional | What counts as keeping it, including the cases where it doesn't apply. |
-
-A rule can also be about everything a change touches, not just the lines it changed. This one
-has no `globs`, so it governs every file, and no `severity`, so the reviewer judges how bad each
-violation is. It is the rule to write if you want a broken caller caught, since the review
-reports nothing no rule describes:
-
-```yaml
-# callers-still-fit.yaml
-description: Changing an export keeps every use of it working
-rule: |
-  When a change alters anything exported — a function's parameters or return type, a type's
-  fields, a constant's value, a rename or a removal — every place in the repository that uses
-  it, tests included, still fits the new version.
-violates: A call site, import or test that no longer matches what the change made of the
-  export — a missing or wrong argument, a field that is gone, a return value used in the old
-  shape, an import of a name that no longer exists.
-complies: The change alters nothing exported, or every use of what it altered was updated to
-  match, in this change.
-```
-
-A violation here is found in the caller, not in the changed file, and the finding points there.
-
-- **Say what a violation looks like.** `violates` and `complies` are the most effective thing to
-  add to a rule that misfires.
-- **Point at examples.** The reviewer can read the repository, so "see `users.ts` for the
-  pattern" works, and so does a rule about other files ("every handler has a test in `tests/`").
-- **Unknown keys are errors**, so a misspelled `severtiy` does not silently do nothing. A rule
-  file that doesn't parse or validate is skipped with a warning naming the problem, and every
-  other rule still runs. Markdown rules from before this format are skipped the same way, with a
-  warning to convert them.
-
-`CLAUDE.md` and `AGENTS.md` files are picked up with no setup: the repository root's, plus the
-ones in each directory above the changed file. They are background for judging the rules —
-written for the coder, they say what is normal here — and never rules themselves.
-
-Rules are read fresh on every pass. Editing one re-reviews exactly the files it governs, and
-nothing else.
-
-### What isn't worth a model call
+### What isn't reviewed
 
 These are listed and diffed like anything else, but never sent to the review. Each shows the
 reason instead:
@@ -506,19 +408,13 @@ behavior change made entirely of whitespace, so it is checked.
 skip list rather than replacing it. `specPaths` names plan or spec documents that the
 documentation rule would otherwise skip.
 
-### Files, chunks and the cache
+### Files and chunks
 
 A change is cut into **chunks**: runs of hunks from one file, coalesced when they sit within a
-few lines of each other and split past a line budget. Chunks are what the board shows. The
-review, though, reads a whole **file** at a time, and is cached under everything it was a
-function of:
-- the file's content,
-- its chunks,
-- every field of the rules, and the context docs, it was reviewed against.
-
-A file nobody touched again, under rules nobody edited, is never reviewed twice, and reverting
-to an earlier state is a free cache hit. A chunk past the analysis budget, or a binary file, is
-shown in full but not sent to a model, and says so.
+few lines of each other and split past a line budget. Chunks are what the board shows, and each
+finding lands on the chunk whose lines it overlaps. The review itself reads whole files. A chunk
+past the analysis budget, or a binary file, is shown in full but not sent to the reviewer, and
+says so.
 
 ## The diff
 
@@ -555,14 +451,13 @@ agent that builds a project before anyone has written a `.gitignore` doesn't flo
 |---|---|
 | `turnstile` | Open the app. This is the normal way to use Turnstile. |
 | `turnstile init` | Write `.turnstile/config.json` and gitignore it. |
-| `turnstile reset` | Forget every note and reviewed mark in this repo. |
+| `turnstile reset` | Forget every note, reviewed mark and stored review in this repo. |
 
 ## Configuration
 
 ```json
 {
-  "model": { "models": ["anthropic/claude-opus-5"], "temperature": 0 },
-  "review": { "maxSteps": 16, "concurrency": 3, "timeoutMs": 90000, "rulesDir": "~/team-rules/my-app" },
+  "review": { "model": "sonnet", "maxTurns": 60, "timeoutMs": 600000 },
   "ask": {
     "model": { "models": ["anthropic/claude-haiku-4.5"], "temperature": 0 },
     "maxSteps": 6,
@@ -576,26 +471,20 @@ agent that builds a project before anyone has written a `.gitignore` doesn't flo
 }
 ```
 
-`models` is a priority-ordered fallback list for the review; you are billed for whichever
-actually serves, and each must support tool calling. `temperature` defaults to 0, so the same
-change should get the same verdicts.
+`review` configures the reviewer, which is Claude Code and authenticates the way the agent does:
+- `model`: a Claude model alias (`sonnet`, `opus`) or full id. Left out, it is whatever the
+  `claude` CLI defaults to.
+- `maxTurns`: model round-trips one review may take. Every read, search and command counts.
+- `timeoutMs`: one review's whole budget. It reads every file a turn changed, so it isn't quick.
 
-`review` bounds each file's review:
-- `maxSteps`: tool-using steps before it must submit its verdicts.
-- `concurrency`: files reviewed at once.
-- `timeoutMs`: one file's whole budget.
-- `rulesDir`: where the rules are, if not the default under `~/.turnstile/rules/`.
-
-`ask` is the same shape, for answering a question about a selection (see "Asking about code").
-It has its own model on purpose: a review runs unattended on every changed file and is worth a
-capable model, while a question is asked by someone watching a spinner and wants a fast, cheap
-one. It defaults to Haiku; set `ask.model.models` to change it, and it must support tool calling.
+`ask` configures answering a question about a selection (see "Asking about code"), over
+OpenRouter. It wants a fast, cheap model, since someone is watching a spinner. It defaults to
+Haiku; set `ask.model.models` (a priority-ordered fallback list — you are billed for whichever
+actually serves) to change it, and it must support tool calling.
 - `maxSteps`: tool-using steps before it must answer with what it has.
-- `timeoutMs`: one question's whole budget, tool calls included. Shorter than a review's —
-  someone is waiting. Both attempts of a retried question share it, so a failure that is going
-  to be reported is reported inside this budget rather than twice it.
-
-Both models authenticate with the same OpenRouter key.
+- `timeoutMs`: one question's whole budget, tool calls included. Both attempts of a retried
+  question share it, so a failure that is going to be reported is reported inside this budget
+  rather than twice it.
 
 ### Telemetry
 
@@ -629,7 +518,7 @@ Queries worth having, all verified against a real session:
 ```promql
 sum(claude_code_cost_usage_USD_total)                      # what the agent has cost
 sum by (type) (claude_code_token_usage_tokens_total)       # input/output/cacheRead/cacheCreation
-sum by (outcome) (turnstile_review_files_total)            # reviewed vs cached vs failed vs skipped vs unruled
+sum by (outcome) (turnstile_review_files_total)            # reviewed vs failed vs skipped
 sum by (severity) (turnstile_findings_total)               # what the reviewer is finding
 sum by (actor, outcome) (turnstile_files_saved_total)      # your saves vs the agent's
 turnstile_editor_keystroke_latency_sum
@@ -639,12 +528,12 @@ turnstile_editor_keystroke_latency_sum
 Two things export, and they meet in the backend rather than in Turnstile:
 
 - **Turnstile**, as `service.name=turnstile`. Spans for the review pass
-  (`turnstile.review.run` with a `turnstile.review.file` per model call), and for
-  `turnstile.diff`, and `turnstile.ask` per question. Under each model call, the AI SDK's own
+  (`turnstile.review.run`, with `turnstile.review.model` around the reviewer's run), for
+  `turnstile.diff`, and `turnstile.ask` per question. Under each question, the AI SDK's own
   spans for the run, each step, each model request and each tool call — model, finish reason,
-  tokens and tool names, never the prompt or reply — which is where to look when a review fails
-  or a question comes back unanswered. Counters for `turnstile.review.files` (by outcome: reviewed, cached, failed,
-  skipped, or unruled — no rule governs it), `turnstile.findings` (by severity), `turnstile.files.saved` (by actor — yours or
+  tokens and tool names, never the prompt or reply — which is where to look when a question
+  comes back unanswered. Counters for `turnstile.review.files` (by outcome: reviewed, failed or
+  skipped), `turnstile.findings` (by severity), `turnstile.files.saved` (by actor — yours or
   the agent's — and outcome) and `turnstile.notes.sent`. Histograms for
   `turnstile.editor.build` and `turnstile.editor.keystroke.latency`, measured in the browser
   where the keystroke actually lands and batched to the server.
@@ -689,8 +578,7 @@ file.
 | Situation | Behavior |
 |---|---|
 | Not a git repository | No session opens; the app offers to initialize the repository |
-| Model outage during a review | The change stays on the list, marked "review failed" with the error, and the next change retries it. A change that already had a review keeps showing it |
-| A rule file is malformed | Frontmatter it doesn't understand is ignored, and the file still applies as a rule |
+| The review fails (Claude Code not logged in, an outage, a timeout) | Its files stay on the list, marked "review failed" with the error. The next turn that changes something, or **Review now**, retries them |
 | Malformed `.turnstile/config.json` | **Won't start** — a config that throws is safer than one that silently falls back to defaults you didn't choose |
 | Agent process fails to spawn | Surfaced as a visible error in the conversation, not a silent hang |
 

@@ -11,9 +11,10 @@ and Turnstile talks its streaming message protocol directly.
 
 Every session runs directly in the user's checkout, and the tree that checkout stood at when the
 session started (uncommitted work included) is the session's **baseline**. The board is simply every file that differs from that baseline —
-committed or not, whoever changed it — with each changed file reviewed by a small tool-using
-model agent that returns a typed verdict on every one of the repository's own rules (YAML files
-kept outside the checkout, with `CLAUDE.md`/`AGENTS.md` as background). The human
+committed or not, whoever changed it. When a turn that changed something ends, a read-only
+Claude Code reviewer (the same SDK, a second one-shot `query()`) reads every changed file with no
+current review, holding it to the repository's own `CLAUDE.md` and skills, and returns typed
+findings. The human
 reads the diff, leaves line-anchored notes, and sends them to the agent when they choose
 (`Session.sendNotes`). Nothing blocks: there is no gate, no approve and no reject.
 
@@ -32,7 +33,7 @@ mutual-reference dance to hand the agent an HTTP URL that didn't exist until the
 was listening, and multi-strategy subprocess-path resolution for a compiled binary. See "Known
 gaps and follow-ups" below for what this migration left unfinished.
 
-Read `README.md` for the product as a user sees it (the baseline, notes, the review and rules,
+Read `README.md` for the product as a user sees it (the baseline, notes, the review,
 configuration, failure behavior). The CLI surface is `src/cli/main.ts`'s `app` (default),
 `init`, and `reset` only.
 
@@ -69,8 +70,8 @@ bun src/cli/main.ts             # open the app (same as `turnstile`, against cwd
 ```
 
 `OPENROUTER_API_KEY` (or whatever `openrouter.apiKeyEnv` in `.turnstile/config.json` names)
-must be set for model calls (the per-file review, and answering a question about a selection;
-both models must support tool calling). The agent itself authenticates however the `claude` CLI
+must be set for answering a question about a selection (the model must support tool calling).
+The review does not use it: it is Claude Code, authenticated like the agent. The agent itself authenticates however the `claude` CLI
 normally does (its own login, or `ANTHROPIC_API_KEY` in the environment) — Turnstile does not
 manage that.
 `TURNSTILE_CLAUDE_CODE_EXECUTABLE` overrides which `claude` binary the SDK spawns, when its own
@@ -151,8 +152,8 @@ layers even for something that feels small.
   the queued-message system for talking to a busy agent, notes (`annotate`/`sendNotes`), and the
   session lifecycle. A turn is: prompt, wait for the stop reason, refresh the board, go idle —
   there is no gate. `writeFile` (`runToolWrite`) is the one path a file gets written through; it
-  writes immediately and calls `afterPossibleEdit()` (`refreshBoard`/`startReview`/`onEdit`/
-  `diffRevision++`/`clearStaleNotes`). `onEvent` calls the same thing whenever any tool call
+  writes immediately and calls `afterPossibleEdit()` (`refreshBoard`/`onEdit`/
+  `diffRevision++`/`clearStaleNotes` — **not** the review, which waits for the turn to end). `onEvent` calls the same thing whenever any tool call
   other than a read or fetch completes (or fails), since the agent can change a file without the
   write tool — Bash (`sed`, a heredoc), `NotebookEdit`, an MCP tool, a subagent. Owns
   no I/O — everything arrives via the `SessionDeps` ports; `connection` is created per session,
@@ -188,78 +189,73 @@ layers even for something that feels small.
   performing the write). `proposedContent` uses a function replacer with `String.replace`
   rather than a plain string, so a `new_text` containing `$&`/`$$`/etc. is inserted literally
   rather than pattern-interpreted.
-- **`src/app/review.ts`** — the review (it replaced the per-chunk risk check, which saw one
-  hunk and nothing else and so couldn't tell what is normal in a repository). After each edit
-  (and at turn end) it groups the board's analyzable, non-skipped chunks **by file** and runs
-  `Reviewer.reviewFile` once per file, in a small pool (`config.review.concurrency`), with:
-  - the file's content at `next` and its chunks,
-  - the rules that govern it (`core/rules.ts`'s `rulesFor`) and the context docs above it
-    (`contextFor`),
-  - a `RepoReader`.
-
-  **A file no rule governs is never sent to the reviewer**: it is reported reviewed with no
-  findings, counted as `unruled`. Rules are the whole mechanism — there is no separate hazard
-  channel for the reviewer to fill a rule-less file with.
-
-  Cached under `reviewKey`, a hash of path + chunk keys + content + every field of those rules +
-  the docs + `REVIEW_VERSION`: editing any part of a rule re-reviews exactly the files it
-  governs, and a cache hit is reported through `onReviewed` just like a fresh review. That is
-  also how a restarted app shows cached reviews. `session.ts`'s `toLive` no longer reads the
-  cache itself, since it can't compute the key without the rules.
-
-  `session.ts` fans the per-file callbacks out to the file's chunks.
-  `core/findings.ts`'s `assignFindings` puts each finding on the first chunk its line range
-  overlaps, and the chunk's `analysis` becomes `{riskLevel: levelOf(its findings), findings}`.
-  `riskLevel` is kept so tab sorting, badges and tree dots work unchanged.
-  - **A finding in another file** (a caller the change broke) goes on the file's change when
-    there is only one, since that change must be the cause.
-  - **Everything else that lands on no chunk** (unchanged lines, or another path when there are
-    several changes) goes to `SessionState.fileFindings`. That shows at the top of the file pane
-    and counts toward the file's level (`ChangedFiles.tsx`'s `worstRisk`), so a change whose
-    only problem is a broken caller doesn't read `none` on its tab.
-  - **The prompt tells the reviewer to check callers:** grep every use of anything exported that
-    changed, tests included. Without that, a live test caught a broken test call 1 run in 3;
-    with it, 8 in 8 across two models. (Measured under the old hazard-first prompt; the verdict
-    prompt keeps the paragraph, and a broken caller is now a location on the rule it breaks.)
-
-  While a file is re-reviewed its chunks show `analyzing` but keep their last analysis on screen
-  (`markAnalyzing`/`reconcile`). A failed model call goes through `onFailed` into `failed`, and
-  `markFailed` shows `pending` with "Review failed: …" (the UI's "review failed"). A chunk that
-  already had a review falls back to it instead.
-- **`src/adapters/model/reviewer.ts`** + **`src/core/verdicts.ts`** — the reviewer agent: AI SDK
-  `generateText` over the OpenRouter model (`client.ts`'s `createModel`), answering with a
-  **typed verdict per rule**. A rule's outcome is a boolean and a severity, so that is what it
-  returns — one `{rule, violated, severity, locations}` for every governing rule — and nothing it
-  writes reaches the human: a finding's message is the rule's own `description`.
-  - **Tools:** `read_file`/`glob`/`grep` backed by the `RepoReader` port — the whole repository,
-    read-only, capped per call, never outside the root — plus `submit_verdicts`.
-  - **The submission is checked as it arrives.** `submit_verdicts` has an `execute`, unlike the
-    old `submit_findings`: it runs `findingsFromVerdicts`, which refuses a missing, duplicated or
-    unknown rule, a broken rule with no location, and a broken rule with no severity where the
-    rule does not fix one — all at once, worded for the model — and returns that as the tool
-    result. The model corrects within the run instead of the review failing and retrying. The
-    rule names are also a `z.enum` in the tool's schema (`verdictSchema`, built per call), so a
-    provider that honours schemas holds the model to them before it gets that far.
-  - **Stopping:** `stopWhen: [isStepCount(maxSteps), () => accepted !== null]` — not
-    `hasToolCall`, which would stop on a refused submission too — and a `prepareStep` that allows
-    only `submit_verdicts` on the last step. `maxSteps` defaults to 16 (was 8): judging every
-    rule can mean several greps and reads per rule.
-  - **Why not `Output.object`:** a JSON response format and tools in the same call are exactly
-    the combination OpenRouter providers disagree about, while a tool call is the one shape every
-    tool-capable model speaks.
-  - **Failure:** a run that ends without an accepted submission throws, and is retried once.
-  - **What the model sees:** every governing rule with all of its fields (`violates`/`complies`
-    as "counts as a violation"/"does not count", a fixed severity said so), the context docs as
-    background, the diff, and the whole file with line numbers — or windows around the changes
-    past `MAX_FILE_LINES`. The prompt is `prompts.ts`'s `REVIEW_SYSTEM_PROMPT`: a verdict on
-    every rule, look beyond the file wherever a rule needs it, broken only by what the change
-    introduces, kept is the expected answer.
-  - **It was briefly replaced and brought back.** An experiment asked each rule of one chunk at
-    a time as typed questions to TypeSafe's System One model (Jev), which answers with calibrated
-    probabilities but cannot use tools. Dropped before merging: a rule often can't be judged
-    from the changed lines — a broken caller, a test that must exist, the sibling pattern — and
-    looking is the reviewer's whole reason to be an agent. What survived is the typed answer
-    and the YAML rule format.
+- **`src/app/review.ts`** — the review: **every changed file with no current review, in one
+  run**. A file's review is current while its `contentHash` at `next` still equals the
+  `StoredReview.fileHash` it was reviewed at (`reviewedHash`, supplied by the session), so a file
+  is picked up exactly when it has never been reviewed or has changed since — the agent's edit, a
+  hand edit, a checkout, another session. Skipped files (`skipReasons`) and unanalyzable chunks
+  are never sent. The stale files go to `Reviewer.review` together, with their concatenated diff
+  against the baseline (capped at `MAX_DIFF_CHARS`, saying so), and each comes back as a
+  `StoredReview` carrying **the hash taken before the run** — so a file edited while it was being
+  read keeps reading stale, never ready off a review of an older version.
+  - **When it runs** (`session.ts`): at the end of a turn whose tree changed (`treeNow()` before
+    the prompt, compared after — `reviewIfChanged`, on the failure path too), and on
+    `Session.reviewNow()` (`POST /review`, the rail's **Review now**). Never mid-turn: reviewing
+    work the agent is still in the middle of is reviewing something about to change, and each
+    review is a whole agent run. Never on opening or resuming a session either — a file that
+    drifted while the session was away reads "not reviewed" until one of the two triggers.
+    `startReview` is `coalesce`d: a trigger that lands mid-run schedules exactly one more.
+  - **State is derived, not accumulated.** `session.ts` keeps `reviews` (the `StoredReview`s by
+    file), `reviewing` and `failed` (by file), and the board as last read per root (`boards`:
+    chunks, skips, and each changed file's hash from `board.ts`'s `fileHashes`). `render()`
+    rebuilds `chunks` and `fileFindings` whole from those through `core/livechunks.ts`'s
+    `liveChunks` on every change. It replaced `reconcile`/`markAnalyzing`/`markReady`/
+    `markFailed`, which carried analyses across recomputes by chunk content key and needed a
+    cache lookup to know anything after a restart.
+  - **Persisted per session** through the `FindingStore` port (`adapters/fs/findings.ts`,
+    `.turnstile/findings.json`, keyed by session id like notes and hidden files), and loaded in
+    `switchTo` — so a resume shows every review that still matches its file, and nothing else.
+    A late result from a session that has since been left is dropped (`live()`).
+  - **Findings onto chunks:** `core/findings.ts`'s `assignFindings` puts each finding on the first
+    chunk its line range overlaps; the chunk's `analysis` is `{riskLevel: levelOf(its findings),
+    findings}`, and `riskLevel` keeps tab sorting, badges and tree dots working. A finding in
+    another file (a caller the change broke) goes on the file's change when there is only one;
+    everything else that lands on no chunk goes to `SessionState.fileFindings`, shown at the top
+    of the file pane and counted toward the file's level (`ChangedFiles.tsx`'s `worstRisk`).
+  - **Failure:** `onFailed` records the reason per file; `liveChunks` shows `pending` with
+    "Review failed: …". The next editing turn or **Review now** retries it.
+- **`src/adapters/agent-sdk/reviewer.ts`** + **`src/core/reviewSubmission.ts`** — the reviewer:
+  one `query()` per review, run in the checkout, **read-only**, returning typed findings
+  `{path, startLine, endLine, severity, title, message}`.
+  - **Why Claude Code and not a model call:** the repository already tells a Claude Code agent how
+    it wants to be worked on — `CLAUDE.md`, project and user skills — and a review should hold the
+    change to exactly that. `settingSources` is left at its default (everything, like the CLI) and
+    `skills: 'all'`. This replaced YAML rules kept outside the checkout plus a per-rule verdict
+    from an OpenRouter tool loop: the rules mostly restated what skills already enforce, and a
+    file no rule governed was never reviewed at all.
+  - **Read-only:** `tools: ['Read','Grep','Glob','Bash','Skill']`, `disallowedTools` for the edit
+    tools, `Agent` and the web tools, and a `canUseTool` that allows the submit tool, `Skill`, and
+    anything `core/toolSafety.ts`'s `isReadOnlyCall` vouches for (so `git log`/`grep` work and
+    `rm`/a redirect do not). `reservedPathIn` first, and `protectionOptions` (exported from
+    `client.ts`) keep it out of Turnstile's state exactly as the agent is.
+  - **`persistSession: false`**, so a review never lands in `~/.claude/projects` or the resume
+    picker. Verified live: no session file is written.
+  - **Streaming input, not a string prompt:** in-process MCP tools and `canUseTool` answer over the
+    control channel, so the prompt iterable yields one message and stays open until the result.
+  - **`submit_findings`** (in-process, `tool()` + `createSdkMcpServer`, the `buildWriteTool`
+    pattern) is the only way it answers. Its handler runs `groupFindings`, which files every
+    finding under a reviewed file — its own `path` when that is one, otherwise the `cause` it must
+    name — and refuses a path outside the root, a bad line range or an empty title/message, all
+    at once, as the tool result, so the model corrects within the run. The first accepted
+    submission is the answer; a run that ends without one throws (`maxTurns`, the timeout via
+    `abortController`, or just stopping).
+  - **The prompt** (`REVIEW_SYSTEM_PROMPT`, appended to the `claude_code` preset): report only
+    what the change introduces; hold it to `CLAUDE.md` and skills; grep every use of a changed
+    export, tests included (without this a live test caught a broken test call 1 run in 3; with
+    it, 8 in 8 — measured under an earlier prompt, and kept); empty is the expected answer.
+  - **Verified live** against a scratch repo with a CLAUDE.md convention, a project skill and a
+    broken caller: all three were found, the skill cited by name, the caller filed under the
+    change via `cause`, in about 40 seconds.
 - **`src/adapters/model/asker.ts`** + **`src/core/ask.ts`** — "highlight some code and ask about
   it". Answered in a card set into the document under the lines it is about. Threaded — you can
   ask a follow-up. Three ways in:
@@ -295,10 +291,10 @@ layers even for something that feels small.
   see below.
   - **The agent does not answer**, and that is the point. It cannot answer while it is mid-turn,
     which is exactly when you are reading its output and want to ask; and the question is not the
-    work, so it should not cost the agent's context window. Its own `ask` config key, defaulting to
-    a cheaper/faster model than the reviewer's.
-  - **Read-only by construction**: `readOnlyTools` (`adapters/model/tools.ts`, shared with the
-    reviewer — `read_file`/`glob`/`grep` over `RepoReader`) is all it is offered. There is no write
+    work, so it should not cost the agent's context window. Its own `ask` config key, over
+    OpenRouter, defaulting to a cheap, fast model.
+  - **Read-only by construction**: `readOnlyTools` (`adapters/model/tools.ts` —
+    `read_file`/`glob`/`grep` over `RepoReader`) is all it is offered. There is no write
     tool to withhold, and none to forget to withhold.
   - **It does not go through `Session`.** `POST /ask` reaches `serveApp`'s own `asker` dep, wired in
     `cli/app.ts` like everything else. No turn, no write, no `SessionState` field — which is what
@@ -424,59 +420,33 @@ layers even for something that feels small.
     disk.
   Both "no approving over an outstanding note" and "a refusal needs a note or a message" are
   enforced in `server.ts` as well as in the page, because the page can be a round behind.
-- **`src/core/rules.ts`** + **`src/adapters/fs/rules.ts`** (`RuleSource`) — rules are one
-  `**/*.{yaml,yml}` file each in a directory **outside the checkout**: `config.review.rulesDir`,
-  or `defaultRulesDir` = `~/.turnstile/rules/<root with non-alphanumerics dashed>/`. The file stem
-  is the rule's name; the fields are `description` and `rule` (required), `globs`, `severity`,
-  `violates` and `complies`. They were Markdown with Cursor-style frontmatter until verdicts
-  became typed: named fields had replaced a prose body, and frontmatter was a hand-rolled parser
-  for three keys.
-  - **Why outside the checkout:** the review is an independent assessment of the coding agent's
-    work. A live run showed the agent `find` the old in-repo `.turnstile/rules/`, `cat` every
-    rule, and write to them.
-  - **The agent is kept out** of `protectedDirs` (`~/.turnstile`, `<cwd>/.turnstile` and a
-    configured `rulesDir`, wired in `cli/app.ts`) in three layers:
-    1. **`protectionOptions`** in `agent-sdk/client.ts` adds `Read(//dir/**)`/`Edit(//dir/**)`
-       deny rules for Claude Code's file tools.
-    2. **Claude Code's OS sandbox**: `filesystem.denyRead`/`denyWrite` on those dirs, and
-       `allowWrite: ['/']` so nothing else is confined. `autoAllowBashIfSandboxed: false` keeps
-       every Bash call going through `canUseTool`, so sudo and `denyPatterns` still apply.
-       `failIfUnavailable: false`.
-    3. **`canUseTool`** first refuses any call whose serialized input names a reserved path
-       (`core/toolSafety.ts`'s `reservedPathIn`). This is the only layer that covers
-       Turnstile's in-process write tool.
+- **Turnstile's state is kept away from the agent** — `protectedDirs` (`~/.turnstile` and
+  `<cwd>/.turnstile`, wired in `cli/app.ts`) in three layers. This once guarded the review rules
+  too (a live run showed an agent `find`, `cat` and rewrite rules kept in the checkout); the rules
+  are gone, the protection of the state directory stays, and the reviewer gets the same options.
+  1. **`protectionOptions`** in `agent-sdk/client.ts` adds `Read(//dir/**)`/`Edit(//dir/**)`
+     deny rules for Claude Code's file tools.
+  2. **Claude Code's OS sandbox**: `filesystem.denyRead`/`denyWrite` on those dirs, and
+     `allowWrite: ['/']` so nothing else is confined. `autoAllowBashIfSandboxed: false` keeps
+     every Bash call going through `canUseTool`, so sudo and `denyPatterns` still apply.
+     `failIfUnavailable: false`.
+  3. **`canUseTool`** first refuses any call whose serialized input names a reserved path
+     (`core/toolSafety.ts`'s `reservedPathIn`). This is the only layer that covers
+     Turnstile's in-process write tool.
 
-    `canUseTool` also routes any Bash call with `dangerouslyDisableSandbox` to the human.
-  - **Why all three:** verified live. The deny rules alone stopped `Read` and `cat`, but not
-    `grep -r` from a parent directory or `python open()`. The sandbox stopped all of them.
-    Network still works: each host comes through `canUseTool` as `SandboxNetworkAccess`.
-  - **Remaining hole: git history.** An agent recovered rules via `git show` from a repo that
-    once committed them.
-  - **Leftovers:** rules left in the checkout's `.turnstile/rules/` are ignored, with a startup
-    warning.
-  - **Parsing:** Bun's built-in `Bun.YAML.parse` in the adapter (no dependency), then
-    `RuleFileSchema` in core — zod, `.strict()`, so a misspelled key is an error rather than a
-    field that silently never applies. No globs means every file. Globs use `riskbar.ts`'s
-    `matchesGlob`.
-  - **Bad files are skipped one at a time and reported**: `RuleSource.load` returns `warnings`
-    beside `rules` and `context` — a file that fails to parse or validate, and any leftover
-    `.md`/`.mdc` from the old format. `cli/app.ts` wraps the source to print each distinct
-    warning once (loads run every pass), and loads once at startup so they show before the first
-    edit.
-  - **Context docs:** every `CLAUDE.md`/`AGENTS.md` (gitignore respected, `node_modules`
-    skipped, capped at `MAX_CONTEXT_CHARS`). Background for judging the rules, never rules
-    themselves: no verdict cites one.
-  - **Freshness:** read fresh each pass, with nothing watching the filesystem.
-- **`src/adapters/fs/repoReader.ts`** (`RepoReader`) — the reviewer's read-only view of the
+  `canUseTool` also routes any Bash call with `dangerouslyDisableSandbox` to the human. Why all
+  three, verified live: the deny rules alone stopped `Read` and `cat`, but not `grep -r` from a
+  parent directory or `python open()`; the sandbox stopped all of them. Network still works: each
+  host comes through `canUseTool` as `SandboxNetworkAccess`.
+- **`src/adapters/fs/repoReader.ts`** (`RepoReader`) — the asker's read-only view of the
   repository. It uses the same globby options as `projectTree.ts`, and every read goes through
   `safePath.ts`'s `readInside`. `grep` is a JS regex over listed files, with no `rg`. Every
-  result is capped (`MAX_GLOB_PATHS`, `MAX_GREP_MATCHES`, and per-read lines in the reviewer's
+  result is capped (`MAX_GLOB_PATHS`, `MAX_GREP_MATCHES`, and per-read lines in the asker's
   tool). The model adapter can't import `adapters/fs`, so `cli/app.ts` wires the reader in
-  through `SessionDeps.reader`.
+  through `serveApp`.
 - **`src/core/chunking.ts`** — splits a parsed patch into chunks: contiguous hunks per file,
   coalesced within a small line gap, split past a size budget. Chunk keys hash *content*, not
-  line numbers, so relocating code keeps its review identity and reverting to a previously
-  reviewed state is a cache hit.
+  line numbers, so relocating code keeps its identity.
 - **`src/core/riskbar.ts`** — `skipReason`/`skipReasons`: which files aren't worth a review
   (docs, formatting, lockfiles, generated code, comment-only, mechanical renames); config lets a
   repo force `alwaysReview`/`neverReview`/`specPaths` globs. A skipped chunk still shows on the
@@ -515,9 +485,11 @@ layers even for something that feels small.
   **In practice the only thing that reaches this is a sandbox escape** (`dangerouslyDisableSandbox`
   on a Bash call): with no `denyPatterns` configured, that and `sudo` are the only paths past
   `isAutoApprovedTool`. It exists because of the OS sandbox; before that, nothing reached it.
-- **`src/core/livechunks.ts`** — reconciles the raw chunk list against in-flight and on-screen
-  analysis to produce what the sidebar renders (`pending`/`analyzing`/`ready`/`skipped`), keeping
-  an analysis across a recompute when a chunk's content is unchanged.
+- **`src/core/livechunks.ts`** — `liveChunks`: derives what the sidebar renders
+  (`pending`/`analyzing`/`ready`/`skipped`) whole, from the chunks, the skips and a `ReviewView`
+  (is the file under review, why did its last review fail, its findings if its review is
+  current). Nothing carries over between recomputes. `pending` means "no current review" — not
+  queued — so the UI shows no spinner for it (`ChangedFiles.tsx`'s `fileRisk`).
 - **`src/core/annotations.ts`** + **`src/adapters/fs/annotations.ts`** — notes, in
   `.turnstile/annotations.json`, keyed by **session id** (so they come back on a resume, the same
   way the cumulative diff does). Entries in older shapes (run-keyed, chunk-anchored) are ignored
@@ -562,7 +534,9 @@ layers even for something that feels small.
   (`ChangedFiles.tsx`'s `ReviewRail`, from the "Review rail" Claude Design handoff): the changed
   files, built from `/diff` plus the pushed chunks, in sections by `railGroup` — high, med, not
   reviewed yet, low, none, skipped — with low/none/skipped folded until opened, and whichever
-  section holds the file on screen opening itself. `changedFiles` sorts in that same order, so the
+  section holds the file on screen opening itself. Above them, while any file has a pending chunk
+  (no current review), a **Review now** bar (`POST /review` → `Session.reviewNow`), disabled while a
+  review runs or the agent is working. `changedFiles` sorts in that same order, so the
   rail reads riskiest first. **There is no J/K**: it walked the rail and moved the pane, which
   stopped making sense once what is open is the reader's own list — it was removed with the second
   tab row. A pending plan is pinned above the sections, and its arrival switches the rail back
@@ -651,9 +625,9 @@ Things this design means, worth knowing before changing it:
 
 The board is everything the checkout differs from the session's baseline by — so resuming a
 session, or restarting the app and resuming it, shows its whole cumulative diff again, with its
-notes. Nothing about the board itself is persisted: it is recomputed from git (the baseline ref
-and the checkout) every time. The review cache (`.turnstile/cache/`) is keyed by file content,
-chunks and rules (`reviewKey`), so a restarted app rarely re-runs a review.
+notes and every review that still matches its file (`.turnstile/findings.json`). Nothing about the
+board itself is persisted: it is recomputed from git (the baseline ref and the checkout) every
+time.
 
 ### Session lifecycle, in one pass
 
@@ -666,7 +640,7 @@ streaming-input `query()`, resolving immediately with that id — see the agent-
 for a new session, immediately for a resume. `session.send(text)` loops: run one `turn()`, then
 deliver anything queued while the agent was busy (and notes the human asked to send mid-turn) as
 another turn, until nothing is left. `turn()` prompts, waits for the stop reason, refreshes the
-board and kicks the review, and goes idle.
+board, starts the review if the turn changed the tree, and goes idle.
 
 ## Testing conventions
 
@@ -674,14 +648,14 @@ board and kicks the review, and goes idle.
   `core`/`app`/`adapters` layout.
 - `tests/architecture.test.ts` is a real test, not a lint rule — it will fail CI if a layering
   rule above is violated. Run it after moving files between layers.
-- Ports are faked in tests (see `tests/app/*.test.ts` for `Reviewer`/`RuleSource`/`RepoReader`/
+- Ports are faked in tests (see `tests/app/*.test.ts` for `Reviewer`/`FindingStore`/
   `AnnotationStore`/etc. fakes) — no real model or subprocess is needed to exercise
-  `createSession`. A fake `RuleSource` needs at least one rule governing the files it touches
-  (`tests/support/rules.ts`'s `EVERY_FILE`), or the review never calls the reviewer at all.
-  `tests/adapters/model/reviewer.test.ts` drives the real reviewer agent with `ai/test`'s
-  `MockLanguageModelV4`, scripting each step's tool calls and recording what the model was shown
-  and offered — including a refused submission, the refusal reaching the next step, and the
-  corrected one being accepted in the same run.
+  `createSession`. The fake snapshots give the tree a new id on every change (`setDeltas`,
+  `setContent`), because the review only runs after a turn whose tree changed: a test that wants
+  a review makes its change inside the prompt (`duringPrompt`/`duringTurn`), not before it.
+  `tests/adapters/agent-sdk/reviewer.test.ts` drives `connectReviewer` with a scripted `query()`
+  that calls `submit_findings` through the in-process MCP server's own registry — the handler
+  the real CLI reaches — including a refused submission followed by the corrected one.
 - `tests/adapters/agent-sdk/client.test.ts` drives `connectAgentSdk` with an injected `queryFn`
   — a fake async generator scripting `SDKMessage`s and recording every `Options`/streamed
   prompt the real `query()` would have received — rather than spawning a real subprocess or
@@ -743,26 +717,22 @@ of the following just works:
   `core` (the ACP SDK's `SessionId` type once leaked in that way, undetected) is not caught by
   it. Keep package imports out of `core` by hand.
 
-## Known gaps (the per-file reviewer)
+## Known gaps (the Claude Code reviewer)
 
-- **The typed verdicts are unverified against a real model.** The tool loop, the in-run
-  refusal and the enum are unit-tested against a scripted mock model only. Worth watching live:
-  whether a real model corrects a refused submission rather than repeating it, and whether 16
-  steps is enough for a file governed by many rules.
-- **A kept rule leaves no trace.** Verdicts that a rule was kept are validated and dropped, so
-  the board cannot yet say "checked against 7 rules, all kept" — only that there are no findings.
+- **Verified live once, on a small repo.** Worth watching on real work: how long a review of a
+  large turn takes against `timeoutMs`/`maxTurns`, and what it costs — it is a whole agent run.
 - **Clicking a finding doesn't highlight or scroll to its lines** yet.
-- **Findings' line numbers are as of the review.** A chunk that keeps its content key while lines
-  shift above it keeps its findings, with stale line numbers, until the file's re-review lands.
-- **Cost scales with edits.** Every edit to a file re-reviews that whole file (up to `maxSteps`
-  model calls). Coalescing collapses bursts, but a long turn of small edits to one big file pays
-  repeatedly.
+- **Findings' line numbers are as of the review**, but a file that changes loses its review
+  outright (it is keyed by the whole file's hash), so they are never shown against moved lines.
+- **Drift is not reviewed on its own.** A file changed outside a turn reads "not reviewed" until
+  the next editing turn or **Review now** — by design, so opening a session costs nothing.
+- **A review in flight is not cancelled** when its session is left; its result is dropped.
 
 ## Known gaps (the pivot away from review cycles)
 
-- **A hand edit in the checkout shows in `/diff` at once, but the chunk list, its review, and
-  clearing the notes on that file only happen on the next agent event** (a write, a tool call, a
-  turn ending). Nothing watches the filesystem, deliberately: the agent is meant to make every
+- **A hand edit in the checkout shows in `/diff` at once, but the chunk list (and so the file
+  reading "not reviewed") and clearing the notes on that file only happen on the next agent
+  event** (a write, a tool call, a turn ending). Nothing watches the filesystem, deliberately: the agent is meant to make every
   edit, and OS change notifications are best-effort anyway.
 - **Run the desktop app with `bun run desktop`** (from the repo root; it runs `tauri dev`).
   Its `beforeDevCommand`, `desktop/scripts/prepare-sidecar.mjs`, builds `dist/turnstile` and

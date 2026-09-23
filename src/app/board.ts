@@ -1,3 +1,4 @@
+import { contentHash } from '../core/annotations.ts'
 import { chunkPatch } from '../core/chunking.ts'
 import { parsePatch } from '../core/patch.ts'
 import type { BaselineResolution, RootHandle, SnapshotStore } from '../core/ports.ts'
@@ -50,4 +51,21 @@ export async function chunksOf(
     chunks.push(...chunkPatch(parsePatch(patch, delta.path), root))
   }
   return chunks
+}
+
+/**
+ * Each changed file's `contentHash` at `next` — what decides whether a file's stored review
+ * still applies to it.
+ */
+export async function fileHashes(
+  snapshots: SnapshotStore,
+  next: SnapshotId,
+  deltas: readonly FileDelta[],
+): Promise<Map<string, string>> {
+  const hashes = new Map<string, string>()
+  for (const delta of deltas) {
+    const content = delta.status === 'Dropped' ? null : await snapshots.contents(next, delta.path)
+    hashes.set(delta.path, contentHash(content))
+  }
+  return hashes
 }

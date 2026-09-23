@@ -24,7 +24,7 @@ function finding(startLine: number, endLine = startLine, path = 'src/a.ts'): Fin
     startLine,
     endLine,
     severity: 'medium',
-    rule: 'a-rule',
+    title: 'A problem',
     message: `${path}:${startLine}`,
   }
 }

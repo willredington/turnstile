@@ -57,13 +57,11 @@ export type AgentSdkClientOptions = {
   denyPatterns?: string[]
   /**
    * Paths the agent is refused any tool call naming (`core/toolSafety.ts`'s `reservedPathIn`):
-   * Turnstile's own state and the review rules, which the agent's work is assessed against and
-   * so must not see. Defaults to none.
+   * Turnstile's own state, which is not the agent's to read or change. Defaults to none.
    */
   reservedPaths?: string[]
   /**
-   * Absolute directories the agent must not read or write by ANY means — the review rules and
-   * Turnstile's state. Enforced two ways, both by Claude Code itself (see `protectionOptions`):
+   * Absolute directories the agent must not read or write by ANY means — Turnstile's state. Enforced two ways, both by Claude Code itself (see `protectionOptions`):
    * `Read(...)`/`Edit(...)` deny rules for its built-in file tools, and its OS sandbox
    * (`filesystem.denyRead`/`denyWrite`) for every Bash command, whatever the command's text.
    * Empty (the default) leaves the sandbox off entirely.
@@ -460,7 +458,7 @@ function parseQuestions(input: Record<string, unknown>): AgentQuestion[] {
  *   agent still runs, protected by the deny rules and `reservedPathIn` alone, rather than not
  *   at all.
  */
-function protectionOptions(dirs: readonly string[]): Pick<Options, 'settings' | 'sandbox'> {
+export function protectionOptions(dirs: readonly string[]): Pick<Options, 'settings' | 'sandbox'> {
   if (dirs.length === 0) return {}
   return {
     // `//` marks an absolute path in a permission rule.
@@ -532,9 +530,9 @@ function buildCanUseTool(
   let counter = 0
 
   const canUseTool: CanUseTool = async (toolName, input, callOptions) => {
-    // First, ahead of the write tool and every auto-approval: the review is only independent of
-    // the agent's work if the agent cannot read the rules it is reviewed against. Refused
-    // outright rather than put to the human — there is no case for letting it through.
+    // First, ahead of the write tool and every auto-approval: Turnstile's own state is not the
+    // agent's to read or change. Refused outright rather than put to the human — there is no
+    // case for letting it through.
     if (reservedPathIn(input, reservedPaths) !== null) {
       return {
         behavior: 'deny',

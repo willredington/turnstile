@@ -544,6 +544,15 @@ export function serveApp(options: ServerOptions) {
         },
       },
 
+      // Reviews every changed file with no current review. Returns at once: the review is a
+      // whole agent run, and its progress arrives as pushed state like everything else.
+      '/review': {
+        POST: () => {
+          session.reviewNow()
+          return json({ ok: true })
+        },
+      },
+
       '/plan-mode': {
         POST: async (request: Request) => {
           const parsed = await body(request)

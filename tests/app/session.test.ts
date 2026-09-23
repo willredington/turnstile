@@ -1,16 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import { createSession, type SessionDeps } from '../../src/app/session.ts'
-import { PLAN_PATH } from '../../src/core/annotations.ts'
+import { contentHash, PLAN_PATH } from '../../src/core/annotations.ts'
 import { DEFAULT_CONFIG } from '../../src/core/config.ts'
 import type {
   AgentConnection,
   AgentConnectionFactory,
-  AnalysisCache,
   AnnotationStore,
   Baseline,
   EditTarget,
+  FindingStore,
   HiddenFileStore,
-  RepoReader,
   Repository,
   Reviewer,
   RootHandle,
@@ -21,13 +20,12 @@ import type {
   AgentEvent,
   Annotation,
   FileDelta,
-  FileReview,
   Finding,
   HiddenFile,
   SessionSummary,
+  StoredReview,
 } from '../../src/core/types.ts'
 import { fakeRepository } from '../support/gitRepo.ts'
-import { EVERY_FILE } from '../support/rules.ts'
 import { type RecordingTelemetry, recordingTelemetry } from '../support/telemetry.ts'
 
 /**
@@ -59,28 +57,40 @@ const PATCH = `diff --git a/src/a.ts b/src/a.ts
 -export const value = 1
 +export const value = 2`
 
-/** A working tree whose difference from the baseline a test sets directly. */
+/**
+ * A working tree whose difference from the baseline a test sets directly. Every change to it —
+ * new deltas, or a file's new contents — gives it a new tree id, which is how a turn is told
+ * apart from one that changed nothing.
+ */
 function fakeSnapshots(initial: FileDelta[] = []): SnapshotStore & {
   setDeltas: (deltas: FileDelta[]) => void
+  setContent: (path: string, text: string) => void
   failWith: (error: Error | null) => void
 } {
   let deltas = initial
   let failure: Error | null = null
+  let revision = 0
+  const contents = new Map<string, string>()
   return {
     setDeltas: (next) => {
       deltas = next
+      revision += 1
+    },
+    setContent: (path, text) => {
+      contents.set(path, text)
+      revision += 1
     },
     failWith: (error) => {
       failure = error
     },
-    capture: async () => 'tree-next',
+    capture: async () => `tree-${revision}`,
     delta: async () => {
       if (failure !== null) throw failure
       return deltas
     },
     // Keyed off the path asked for: the chunker reads the patch header.
     patch: async (_base, _next, path) => PATCH.replaceAll('src/a.ts', path),
-    contents: async () => 'export const value = 1\n',
+    contents: async (_tree, path) => contents.get(path) ?? 'export const value = 1\n',
   }
 }
 
@@ -155,22 +165,19 @@ function fakeAnnotations(seed: Annotation[] = []): AnnotationStore & { notes: An
   }
 }
 
-const NO_READER: RepoReader = {
-  read: async () => null,
-  glob: async () => ({ paths: [], truncated: false }),
-  grep: async () => ({ matches: [], truncated: false }),
-}
-
-function fakeCache(seed: Record<string, FileReview> = {}): AnalysisCache {
-  const entries = new Map(Object.entries(seed))
+function fakeFindings(seed: Record<string, StoredReview[]> = {}): FindingStore & {
+  stored: Map<string, StoredReview[]>
+} {
+  const stored = new Map(Object.entries(seed))
   return {
-    get: async (key) => entries.get(key) ?? null,
-    put: async (key, review) => {
-      entries.set(key, review)
+    stored,
+    bySession: async (sessionId) => stored.get(sessionId) ?? [],
+    put: async (sessionId, reviews) => {
+      const kept = (stored.get(sessionId) ?? []).filter(
+        (entry) => !reviews.some((review) => review.path === entry.path),
+      )
+      stored.set(sessionId, [...kept, ...reviews])
     },
-    claim: async () => true,
-    release: async () => {},
-    prune: async () => {},
   }
 }
 
@@ -293,8 +300,8 @@ function harness(
     annotations?: Annotation[]
     files?: Record<string, string>
     repository?: Repository
-    cache?: AnalysisCache
     reviewer?: Reviewer
+    findings?: FindingStore & { stored: Map<string, StoredReview[]> }
     openAt?: SessionDeps['openAt']
     telemetry?: RecordingTelemetry
   } = {},
@@ -306,6 +313,7 @@ function harness(
   const hidden = fakeHidden()
   const editTarget = fakeEditTarget(options.files)
   const analyzed: string[] = []
+  const findings = options.findings ?? fakeFindings()
   const deps: SessionDeps = {
     connect: connection.connect,
     history: connection.history,
@@ -316,15 +324,13 @@ function harness(
     annotations,
     hidden,
     editTarget,
-    cache: options.cache ?? fakeCache(),
     reviewer: options.reviewer ?? {
-      reviewFile: async (input) => {
-        analyzed.push(input.path)
-        return []
+      review: async (input) => {
+        analyzed.push(...input.files.map((file) => file.path))
+        return new Map(input.files.map((file) => [file.path, []]))
       },
     },
-    rules: EVERY_FILE,
-    reader: NO_READER,
+    findings,
     config: DEFAULT_CONFIG,
     ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),
   }
@@ -337,6 +343,7 @@ function harness(
     hidden,
     editTarget,
     analyzed,
+    findings,
   }
 }
 
@@ -521,9 +528,10 @@ describe('a turn', () => {
     expect(connection.prompts).toEqual(['one'])
   })
 
-  test('each changed file is reviewed in the background', async () => {
-    const { session, analyzed } = harness({ deltas: [delta('src/a.ts')] })
+  test('a turn that changes files has them reviewed when it ends', async () => {
+    const { session, connection, snapshots, analyzed } = harness()
     await session.start()
+    connection.duringPrompt(() => snapshots.setDeltas([delta('src/a.ts')]))
     await session.send('go')
     await settle()
 
@@ -534,6 +542,16 @@ describe('a turn', () => {
     })
   })
 
+  test('a turn that changes nothing is not reviewed', async () => {
+    const { session, analyzed } = harness({ deltas: [delta('src/a.ts')] })
+    await session.start()
+    await session.send('what does this do?')
+    await settle()
+
+    expect(analyzed).toEqual([])
+    expect(session.state().chunks[0]).toMatchObject({ status: 'pending', reason: null })
+  })
+
   /** Findings land on the chunk they overlap; the rest stay with the file rather than vanish. */
   test('findings map onto chunks, and the rest onto the file', async () => {
     const finding = (line: number, severity: Finding['severity']): Finding => ({
@@ -541,33 +559,31 @@ describe('a turn', () => {
       startLine: line,
       endLine: line,
       severity,
-      rule: 'no-default-exports',
+      title: 'Something off',
       message: `at ${line}`,
     })
-    const { session } = harness({
-      deltas: [delta('src/a.ts')],
+    const { session, connection, snapshots } = harness({
       reviewer: {
-        reviewFile: async (input) => [
-          finding(input.chunks[0]?.startLine ?? 1, 'medium'),
-          finding(9999, 'high'),
-        ],
+        review: async () => new Map([['src/a.ts', [finding(1, 'medium'), finding(9999, 'high')]]]),
       },
     })
     await session.start()
+    connection.duringPrompt(() => snapshots.setDeltas([delta('src/a.ts')]))
     await session.send('go')
     await settle()
 
     const [chunk] = session.state().chunks
     expect(chunk?.analysis?.riskLevel).toBe('medium')
-    expect(chunk?.analysis?.findings.map((f) => f.message)).toHaveLength(1)
+    expect(chunk?.analysis?.findings.map((f) => f.message)).toEqual(['at 1'])
     expect(session.state().fileFindings).toEqual([
       { root: ROOT, path: 'src/a.ts', findings: [finding(9999, 'high')] },
     ])
   })
 
-  test('a file not worth a risk check says why instead', async () => {
-    const { session, analyzed } = harness({ deltas: [delta('bun.lock')] })
+  test('a file not worth a review says why instead', async () => {
+    const { session, connection, snapshots, analyzed } = harness()
     await session.start()
+    connection.duringPrompt(() => snapshots.setDeltas([delta('bun.lock')]))
     await session.send('go')
     await settle()
 
@@ -667,19 +683,46 @@ describe('the write tool', () => {
 
 describe('the review', () => {
   /** A failure used to leave the chunk on "analyzing" forever, looking like a check never run. */
-  test('a failed review is reported on the chunk, and retried on the next change', async () => {
+  test('a failed review is reported on the chunk, and retried by reviewNow', async () => {
     let fail = true
     const { session, connection, snapshots } = harness({
       reviewer: {
-        reviewFile: async () => {
-          if (fail) throw new Error('no API key')
-          return []
+        review: async (input) => {
+          if (fail) throw new Error('claude exited with code 1')
+          return new Map(input.files.map((file) => [file.path, []]))
         },
       },
     })
     await session.start()
+    connection.duringPrompt(() => snapshots.setDeltas([delta('src/a.ts')]))
+    await session.send('go')
+    await settle()
 
-    snapshots.setDeltas([delta('src/a.ts')])
+    expect(session.state().chunks[0]).toMatchObject({
+      status: 'pending',
+      reason: 'Review failed: claude exited with code 1',
+    })
+
+    fail = false
+    session.reviewNow()
+    await until(() => session.state().chunks[0]?.status === 'ready')
+    expect(session.state().chunks[0]).toMatchObject({
+      reason: null,
+      analysis: { riskLevel: 'none' },
+    })
+  })
+
+  test('a file changed after its review reads unreviewed again', async () => {
+    const { session, connection, snapshots } = harness()
+    await session.start()
+    connection.duringPrompt(() => snapshots.setDeltas([delta('src/a.ts')]))
+    await session.send('go')
+    await settle()
+    expect(session.state().chunks[0]?.status).toBe('ready')
+
+    // A hand edit: on the board at once, but not reviewed until someone asks.
+    connection.duringPrompt(() => {})
+    snapshots.setContent('src/a.ts', 'export const value = 3\n')
     connection.emit({
       kind: 'tool',
       id: 't1',
@@ -687,31 +730,110 @@ describe('the review', () => {
       toolKind: 'execute',
       status: 'completed',
     })
-    await until(
-      () =>
-        session.state().chunks[0]?.reason !== null &&
-        session.state().chunks[0]?.reason !== undefined,
-    )
+    await settle()
 
-    expect(session.state().chunks[0]).toMatchObject({
-      status: 'pending',
-      reason: 'Review failed: no API key',
-    })
+    expect(session.state().chunks[0]).toMatchObject({ status: 'pending', analysis: null })
+  })
 
-    fail = false
-    connection.emit({
-      kind: 'tool',
-      id: 't2',
-      title: 'x',
-      toolKind: 'execute',
-      status: 'completed',
-    })
-    await until(() => session.state().chunks[0]?.status === 'ready')
+  test('reviewNow reviews only the files with no current review', async () => {
+    const { session, connection, snapshots, analyzed } = harness()
+    await session.start()
+    connection.duringPrompt(() => snapshots.setDeltas([delta('src/a.ts')]))
+    await session.send('go')
+    await settle()
 
-    expect(session.state().chunks[0]).toMatchObject({
-      reason: null,
-      analysis: { riskLevel: 'none' },
+    snapshots.setDeltas([delta('src/a.ts'), delta('src/b.ts')])
+    session.reviewNow()
+    await settle()
+
+    expect(analyzed).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(session.state().chunks.map((chunk) => chunk.status)).toEqual(['ready', 'ready'])
+  })
+
+  test('reviewNow with everything current asks the reviewer nothing', async () => {
+    const { session, connection, snapshots, analyzed } = harness()
+    await session.start()
+    connection.duringPrompt(() => snapshots.setDeltas([delta('src/a.ts')]))
+    await session.send('go')
+    await settle()
+
+    session.reviewNow()
+    await settle()
+
+    expect(analyzed).toEqual(['src/a.ts'])
+  })
+
+  test('each review is stored under the session, with the hash it was reviewed at', async () => {
+    const { session, connection, snapshots, findings } = harness()
+    await session.start()
+    connection.duringPrompt(() => {
+      snapshots.setDeltas([delta('src/a.ts')])
+      snapshots.setContent('src/a.ts', 'export const value = 2\n')
     })
+    await session.send('go')
+    await settle()
+
+    expect(findings.stored.get(session.state().sessionId)).toEqual([
+      {
+        root: ROOT,
+        path: 'src/a.ts',
+        fileHash: contentHash('export const value = 2\n'),
+        findings: [],
+        reviewedAt: expect.any(String),
+      },
+    ])
+  })
+
+  /**
+   * The case this whole store exists for: a session resumed after its files moved on — in
+   * another session, by hand, a checkout. A review of lines that are no longer there must not
+   * be shown as if it were about the file as it is now.
+   */
+  test('a resume shows the reviews still current, and not the stale ones', async () => {
+    const stale = contentHash('export const value = 1\n')
+    const review = (path: string, fileHash: string): StoredReview => ({
+      root: ROOT,
+      path,
+      fileHash,
+      findings: [
+        { path, startLine: 1, endLine: 1, severity: 'high', title: 'Bad', message: 'Bad.' },
+      ],
+      reviewedAt: '2026-09-23T12:00:00.000Z',
+    })
+    const { session, snapshots, analyzed } = harness({
+      openAt: 'first-prompt',
+      deltas: [delta('src/current.ts'), delta('src/moved-on.ts')],
+      findings: fakeFindings({
+        'old-1': [review('src/current.ts', stale), review('src/moved-on.ts', stale)],
+      }),
+    })
+    snapshots.setContent('src/moved-on.ts', 'export const value = 9\n')
+    await session.start()
+    await session.resumeSession('old-1')
+    await settle()
+
+    const byPath = new Map(session.state().chunks.map((chunk) => [chunk.path, chunk]))
+    expect(byPath.get('src/current.ts')).toMatchObject({
+      status: 'ready',
+      analysis: { riskLevel: 'high' },
+    })
+    expect(byPath.get('src/moved-on.ts')).toMatchObject({ status: 'pending', analysis: null })
+    // Opening a session costs nothing: the stale file waits for a turn or for reviewNow.
+    expect(analyzed).toEqual([])
+  })
+
+  test('a new session starts with nothing reviewed', async () => {
+    const { session, connection, snapshots } = harness()
+    await session.start()
+    connection.duringPrompt(() => snapshots.setDeltas([delta('src/a.ts')]))
+    await session.send('go')
+    await settle()
+    expect(session.state().chunks[0]?.status).toBe('ready')
+
+    await session.newSession()
+    await settle()
+
+    expect(session.state().chunks[0]).toMatchObject({ status: 'pending', analysis: null })
   })
 })
 

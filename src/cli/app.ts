@@ -1,25 +1,23 @@
-import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createAgentHistory, createAgentSdkClient } from '../adapters/agent-sdk/client.ts'
+import { createAgentSdkReviewer } from '../adapters/agent-sdk/reviewer.ts'
 import { createFileAnnotationStore } from '../adapters/fs/annotations.ts'
-import { createFileAnalysisCache } from '../adapters/fs/cache.ts'
 import { loadConfig } from '../adapters/fs/config.ts'
 import { createFileEditTarget } from '../adapters/fs/editTarget.ts'
+import { createFileFindingStore } from '../adapters/fs/findings.ts'
 import { createFileHiddenStore } from '../adapters/fs/hidden.ts'
 import { createProjectTree } from '../adapters/fs/projectTree.ts'
 import { createRepoReader } from '../adapters/fs/repoReader.ts'
-import { createFileRuleSource, expandHome, rulesDirFor } from '../adapters/fs/rules.ts'
 import { createGitRepository } from '../adapters/git/repository.ts'
 import { createGitRootRegistry } from '../adapters/git/rootRegistry.ts'
 import { createModelAsker } from '../adapters/model/asker.ts'
 import { createModel, readApiKey } from '../adapters/model/client.ts'
-import { createModelReviewer } from '../adapters/model/reviewer.ts'
 import { createOtelTelemetry } from '../adapters/otel/telemetry.ts'
 import { serveApp } from '../adapters/web/server.ts'
 import { createSession } from '../app/session.ts'
 import { STATE_DIR } from '../core/config.ts'
-import type { Asker, Reviewer, RuleSource, Session, Telemetry } from '../core/ports.ts'
+import type { Asker, Session, Telemetry } from '../core/ports.ts'
 import { agentTelemetryEnv, noopTelemetry } from '../core/telemetry.ts'
 import { watchParent } from './parentWatch.ts'
 
@@ -63,8 +61,7 @@ export async function runApp(): Promise<void> {
     : noopTelemetry
   Object.assign(process.env, agentTelemetryEnv(config.telemetry))
 
-  const cache = createFileAnalysisCache(cwd)
-  // One read-only view of the repository, shared by the reviewer's tools and the asker's.
+  // A read-only view of the repository, for the asker's tools and the file explorer.
   const reader = createRepoReader()
   const annotations = createFileAnnotationStore(cwd)
   const hidden = createFileHiddenStore(cwd)
@@ -84,36 +81,7 @@ export async function runApp(): Promise<void> {
     untrackedExcludes: config.untrackedExcludes,
   })
 
-  // Built per call, so a missing API key fails that file's review (shown on the board) rather
-  // than the app's start.
-  const reviewer: Reviewer = {
-    reviewFile: (input) =>
-      createModelReviewer(
-        createModel(readApiKey(process.env, config.openrouter.apiKeyEnv), config.model),
-        config.review,
-      ).reviewFile(input),
-  }
-
-  // Rules are read afresh every pass, so a broken rule file would otherwise be reported on every
-  // edit. Each distinct problem is said once, when it first appears — including one introduced
-  // by editing a rule while the app runs.
-  const fileRules = createFileRuleSource(
-    config.review.rulesDir === undefined ? {} : { rulesDir: config.review.rulesDir },
-  )
-  const warned = new Set<string>()
-  const rules: RuleSource = {
-    load: async (root) => {
-      const loaded = await fileRules.load(root)
-      for (const warning of loaded.warnings) {
-        if (warned.has(warning)) continue
-        warned.add(warning)
-        process.stderr.write(`${warning}\n`)
-      }
-      return loaded
-    },
-  }
-
-  // Built per call for the same reason, and it matters more here: a missing key must reach the
+  // Built per call: a missing key must reach the
   // reader as "I cannot answer that" on the question they just asked, not as a failure to start.
   const asker: Asker = {
     ask: (input) =>
@@ -123,13 +91,19 @@ export async function runApp(): Promise<void> {
       ).ask(input),
   }
 
-  const protectedDirs = [
-    join(homedir(), STATE_DIR),
-    join(cwd, STATE_DIR),
-    ...(config.review.rulesDir === undefined
-      ? []
-      : [expandHome(config.review.rulesDir, homedir())]),
-  ]
+  // Turnstile's own state, kept out of reach of the coding agent and the reviewer alike.
+  const protectedDirs = [join(homedir(), STATE_DIR), join(cwd, STATE_DIR)]
+  const reservedPaths = [STATE_DIR, ...protectedDirs]
+
+  // A read-only Claude Code run over the files a turn changed, in this checkout — so it loads the
+  // repository's own CLAUDE.md and skills, as the coding agent does.
+  const reviewer = createAgentSdkReviewer({
+    model: config.review.model,
+    timeoutMs: config.review.timeoutMs,
+    maxTurns: config.review.maxTurns,
+    protectedDirs,
+    reservedPaths,
+  })
 
   // The session and the server are mutually referential: the session pushes state changes
   // through the server, which does not exist until the session does.
@@ -143,13 +117,11 @@ export async function runApp(): Promise<void> {
         writeFile,
         requestPlanApproval,
         denyPatterns: config.toolPermissions.denyPatterns,
-        // The review is only independent if the agent cannot see what it is assessed against:
-        // `~/.turnstile` (every repository's default rules), this checkout's own state, and a
-        // configured `rulesDir`. `protectedDirs` is enforced by Claude Code's deny rules and
-        // OS sandbox; `reservedPaths` also refuses Turnstile's own write tool, which runs in
-        // this process, outside both.
+        // Turnstile's own state is not the agent's to read or change. `protectedDirs` is
+        // enforced by Claude Code's deny rules and OS sandbox; `reservedPaths` also refuses
+        // Turnstile's own write tool, which runs in this process, outside both.
         protectedDirs,
-        reservedPaths: [STATE_DIR, ...protectedDirs],
+        reservedPaths,
         // Claude Code's own plan directory — outside the repository, and the one place the
         // plan tool can write. Without it the agent has no sanctioned way to write the plan
         // file the harness asks it for, and falls back to a shell redirect.
@@ -161,10 +133,8 @@ export async function runApp(): Promise<void> {
     annotations,
     hidden,
     editTarget,
-    cache,
     reviewer,
-    rules,
-    reader,
+    findings: createFileFindingStore(cwd),
     config,
     telemetry,
     onChange: (state) => broadcast(state as never),
@@ -178,11 +148,6 @@ export async function runApp(): Promise<void> {
   // `turnstile: <url>` on stdout is the one line the desktop app reads to find the server (see
   // `desktop/src-tauri/src/sidecar.rs`), so nothing else goes to stdout with that prefix.
   process.stdout.write(`turnstile: ${server.url}\n`)
-  const rulesDir = rulesDirFor(
-    cwd,
-    config.review.rulesDir === undefined ? {} : { rulesDir: config.review.rulesDir },
-  )
-  process.stderr.write(`Review rules: ${rulesDir}\n`)
   // Off by default, and off looks exactly like an empty backend from the Grafana side — so say
   // which one it is.
   process.stderr.write(
@@ -190,15 +155,6 @@ export async function runApp(): Promise<void> {
       ? `Telemetry: exporting to ${config.telemetry.endpoint}\n`
       : 'Telemetry: off (set "telemetry": { "enabled": true } in .turnstile/config.json)\n',
   )
-  // Read once now, so a rule file that will be skipped is reported at start, not at first edit.
-  await rules.load(cwd).catch(() => {})
-  // Rules used to live in the checkout, where the coding agent could read them. They are not
-  // read from there any more; say so rather than let them silently stop applying.
-  if (existsSync(join(cwd, STATE_DIR, 'rules'))) {
-    process.stderr.write(
-      `${STATE_DIR}/rules/ in this checkout is ignored — rules now live outside it. Move them to ${rulesDir}\n`,
-    )
-  }
   if (session.state().tracking !== 'git') {
     process.stderr.write(
       'This directory is not a git repository, so no session was opened. ' +

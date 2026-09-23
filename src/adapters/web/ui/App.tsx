@@ -530,6 +530,8 @@ export function App() {
               <div className="workspace-left-panel" hidden={!filesOpen}>
                 <ReviewRail
                   onCollapse={() => setFilesOpen(false)}
+                  onReviewNow={() => void post('/review', {})}
+                  agentWorking={state.status === 'working'}
                   files={visibleFiles}
                   hidden={hiddenFiles}
                   annotations={state.annotations}
@@ -568,8 +570,8 @@ export function App() {
                     <div className="main-empty">
                       <p>Nothing has changed in this session yet.</p>
                       <p className="main-empty-sub">
-                        Every file the agent touches shows up in the rail, reviewed against the
-                        repository's rules.
+                        Every file the agent touches shows up in the rail, and is reviewed when its
+                        turn ends.
                       </p>
                     </div>
                   ) : visibleFiles.length === 0 ? (

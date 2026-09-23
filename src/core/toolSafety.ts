@@ -96,15 +96,15 @@ export function isAutoApprovedTool(
 /**
  * The first of `reserved` that a tool call's input names, or null.
  *
- * What keeps the review independent of the work it reviews: Turnstile's rules live outside the
- * checkout, and its own state inside `.turnstile/`, and the coding agent is refused any tool call
- * — a Read, a Grep, a Bash command, the write tool — whose input mentions either. Matched against
+ * What keeps Turnstile's own state — `.turnstile/` in the checkout, and `~/.turnstile` — out of
+ * the agent's hands: it is refused any tool call — a Read, a Grep, a Bash command, the write
+ * tool — whose input mentions either. Matched against
  * the whole serialized input rather than per-tool fields, so a new tool or an unusual argument
  * name cannot route around it.
  *
  * A speed bump, not a sandbox: a command that names neither (`grep -r` from `/`, say) can still
- * read what it reaches. It stops the agent stumbling on the rules and reading them outright,
- * which is the case that matters.
+ * read what it reaches. It stops the agent stumbling on the state directory and reading or
+ * rewriting it outright, which is the case that matters.
  */
 export function reservedPathIn(
   input: Record<string, unknown>,

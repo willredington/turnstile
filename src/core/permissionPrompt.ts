@@ -96,7 +96,7 @@ function reasonFor(cause: PermissionCause, blockedPath: string | null): string |
   }
   if (cause === 'sandbox-escape') {
     const base =
-      'The agent asked to run this outside the OS sandbox, which is what keeps it away from Turnstile’s rules and state.'
+      'The agent asked to run this outside the OS sandbox, which is what keeps it away from Turnstile’s own state.'
     return blockedPath === null ? base : `${base} It was blocked from ${blockedPath}.`
   }
   if (cause === 'plan-mode') {

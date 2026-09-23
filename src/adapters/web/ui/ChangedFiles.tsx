@@ -103,7 +103,7 @@ export type FileRisk = {
   /** `high` / `med` / `low` / `none`, or `—` for a file the review will never read. */
   badge: string
   tone: 'high' | 'med' | 'low' | 'none'
-  /** Still being read, or queued to be — the badge shows a spinner instead of a word. */
+  /** Being reviewed right now — the badge shows a spinner instead of a word. */
   reading: boolean
   /** Why the whole file was skipped, trimmed to the reason itself ("generated or vendored"). */
   skipped: string | null
@@ -125,12 +125,9 @@ function shortReason(reason: string | null): string {
 
 export function fileRisk(file: ChangedFile): FileRisk {
   const worst = worstRisk(file)
-  // A pending chunk with a reason had its check fail — nothing is reading it until the next
-  // change, so it should not spin.
-  const reading = file.chunks.some(
-    (chunk) =>
-      chunk.status === 'analyzing' || (chunk.status === 'pending' && chunk.reason === null),
-  )
+  // Only a review in flight spins. Pending is not queued: it waits for the end of a turn that
+  // changes something, or for "Review now", and a spinner would promise work nobody started.
+  const reading = file.chunks.some((chunk) => chunk.status === 'analyzing')
   const allSkipped =
     file.chunks.length > 0 && file.chunks.every((chunk) => chunk.status === 'skipped')
   if (allSkipped) {
@@ -230,6 +227,8 @@ export function ReviewRail({
   onShow,
   onShowAllChange,
   onCollapse,
+  onReviewNow,
+  agentWorking,
 }: {
   /** The files to list — every changed file not hidden. */
   files: ChangedFile[]
@@ -255,6 +254,11 @@ export function ReviewRail({
   onShowAllChange: (showAll: boolean) => void
   /** Fold the whole panel to its rail. */
   onCollapse: () => void
+  /** Review every changed file with no current review. */
+  onReviewNow: () => void
+  /** The agent is mid-turn: its work will be reviewed when the turn ends, so asking now would
+   *  review something about to change. */
+  agentWorking: boolean
 }) {
   const selectedRef = useRef<HTMLDivElement>(null)
   const [toggled, setToggled] = useState<ReadonlyMap<RailGroup | 'reviewed', boolean>>(new Map())
@@ -298,6 +302,12 @@ export function ReviewRail({
   }, [planWaiting])
 
   const skipped = files.filter((file) => railGroup(file) === 'skipped').length
+  const reviewing = files.some((file) => fileRisk(file).reading)
+  // Counted by pending chunks, not by the "not reviewed yet" section: a file with nothing a
+  // review could read (a pure rename, a binary) sits in that section but is no work for it.
+  const unreviewed = files.filter((file) =>
+    file.chunks.some((chunk) => chunk.status === 'pending'),
+  ).length
   const changedCount = files.length + hidden.length
   const count = showAll
     ? allCount === null
@@ -390,6 +400,29 @@ export function ReviewRail({
                 </span>
               )}
               <span className="review-rail-plan-aside">waiting on you</span>
+            </button>
+          </div>
+        )}
+
+        {(unreviewed > 0 || reviewing) && (
+          <div className="review-rail-action">
+            <span className="review-rail-action-text">
+              {reviewing
+                ? 'Reviewing…'
+                : `${unreviewed} ${unreviewed === 1 ? 'file' : 'files'} not reviewed`}
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary review-rail-action-button"
+              disabled={reviewing || agentWorking || unreviewed === 0}
+              title={
+                agentWorking
+                  ? 'The agent is working — its changes are reviewed when it stops'
+                  : 'Review every changed file that has no current review'
+              }
+              onClick={onReviewNow}
+            >
+              Review now
             </button>
           </div>
         )}
