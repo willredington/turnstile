@@ -75,7 +75,7 @@ export function PermissionOverlay({ permissions }: { permissions: PendingPermiss
         {current.flagged !== undefined && current.flagged.length > 0 ? (
           <>
             <p className="permission-reason permission-flagged-lead">
-              Auto-mode flagged this. It looks like it:
+              This was flagged. It looks like it:
             </p>
             <ul className="permission-flagged">
               {current.flagged.map((statement) => (

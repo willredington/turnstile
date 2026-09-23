@@ -260,7 +260,7 @@ way a file's contents change, and it only writes inside the repository.
 
 Everything else, such as a shell command or an MCP tool call, goes through **auto-mode**. You
 set it up once, in the app. It opens by itself the first time, and you can reopen it later from
-**Edit auto-mode** in the top bar, where **Start over** puts back the suggestions. There you say, in plain words, when the agent should ask you first:
+**Edit tool permissions** in the top bar, where **Start over** puts back the suggestions. There you say, in plain words, when the agent should ask you first:
 
 - "Runs a command with elevated privileges (sudo, doas, su)"
 - "Pushes, publishes or deploys anything"

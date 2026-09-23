@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { PLAN_PATH } from '../../../core/annotations.ts'
 import type { ToolGroupEntry } from '../../../core/transcript.ts'
 import {
@@ -459,7 +459,6 @@ export function ConversationPanel({
 
   const doing = nowDoing(state.transcript)
 
-  const tail = useRef<HTMLDivElement>(null)
   const column = useRef<HTMLDivElement>(null)
 
   /**
@@ -469,23 +468,55 @@ export function ConversationPanel({
    * scrolled up reading what the agent did earlier — which, during a turn that streams for
    * minutes, is most of the time someone spends in this column. So: stick while at the
    * bottom, let go the moment they scroll away, and re-stick when they come back.
+   *
+   * Letting go lasts only as long as the reader is still here, though. Opening the panel,
+   * opening another session and sending a message all mean "show me what's latest", so each
+   * sticks again — otherwise the column reopens wherever it was last left, or at the top.
    */
   const stuck = useRef(true)
 
+  const toBottom = (): void => {
+    const el = column.current
+    if (el !== null) el.scrollTop = el.scrollHeight
+  }
+
+  const stickToBottom = (): void => {
+    stuck.current = true
+    toBottom()
+  }
+
   const onScroll = (): void => {
     const el = column.current
-    const end = tail.current
-    if (el === null || end === null) return
-    stuck.current = end.getBoundingClientRect().bottom - el.getBoundingClientRect().bottom < 24
+    if (el === null) return
+    stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
   }
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: opening and switching are the triggers
+  useLayoutEffect(() => {
+    if (expanded) stickToBottom()
+  }, [expanded, state.sessionId])
 
   // Keyed on the revision rather than the entry count, because streamed prose merges into the
   // entry already there: the column grows without the list getting any longer, and a length
   // trigger would follow tool calls while sitting still through a paragraph.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the revision is the trigger
-  useEffect(() => {
-    if (expanded && stuck.current) tail.current?.scrollIntoView({ block: 'end' })
+  useLayoutEffect(() => {
+    if (expanded && stuck.current) toBottom()
   }, [state.revision, expanded])
+
+  // The column also grows with no new revision — a tool group unfolding, a code block laying
+  // out late, the panel being dragged shorter — and a stuck column should follow that too.
+  useEffect(() => {
+    const el = column.current
+    const inner = el?.firstElementChild
+    if (!expanded || el === null || inner === null || inner === undefined) return
+    const observer = new ResizeObserver(() => {
+      if (stuck.current) el.scrollTop = el.scrollHeight
+    })
+    observer.observe(inner)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [expanded])
 
   // Recomputed only when the transcript itself moves. It walks every entry, and this component
   // re-renders on every pushed state — including, during a turn, one per coalesced batch of
@@ -519,6 +550,7 @@ export function ConversationPanel({
     const text = draft.trim()
     if (text === '') return
     setDraft('')
+    stickToBottom()
     void post(queueing ? '/queue' : '/prompt', { text })
   }
 
@@ -526,6 +558,7 @@ export function ConversationPanel({
     if (unsentNotes === 0) return
     const text = draft.trim()
     setDraft('')
+    stickToBottom()
     void post('/notes/send', { text })
   }
 
@@ -606,8 +639,6 @@ export function ConversationPanel({
               <span className="doing-what">thinking…</span>
             </div>
           )}
-
-          <div ref={tail} />
         </div>
       </div>
 

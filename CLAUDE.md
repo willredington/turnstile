@@ -493,7 +493,7 @@ layers even for something that feels small.
     human, auto-mode not asked) → `autoApprover.verdict` (only `allow` runs unasked). No
     `autoApprover` means auto-mode is off.
   - **UI**: `AutoModeSetup.tsx` opens by itself when no policy exists (once per page load) and
-    from the top bar's **Edit auto-mode** button; **Start over** resets the draft to the seeds
+    from the top bar's **Edit tool permissions** button; **Start over** resets the draft to the seeds
     (nothing is saved until **Save**). The UI shows outcomes (**Asks**/**Passes**), never
     probabilities — on the setup screen, its dry run, and the prompt's flagged list alike. `GET`/`PUT /auto-mode`, `POST /auto-mode/trial`.
     Legacy `denyPatterns` (`loadLegacyDenyPatterns`, read off the raw config files since the

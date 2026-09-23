@@ -242,11 +242,11 @@ export function TopBar({
             title={
               autoMode === 'on'
                 ? 'Change when the agent asks you first'
-                : 'Auto-mode is not set up, so every tool call asks you'
+                : 'Tool permissions are not set up, so every tool call asks you'
             }
             onClick={onAutoMode}
           >
-            {autoMode === 'on' ? 'Edit auto-mode' : 'Set up auto-mode'}
+            {autoMode === 'on' ? 'Edit tool permissions' : 'Set up tool permissions'}
           </button>
         )}
         <SessionSwitcher

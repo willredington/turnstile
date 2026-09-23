@@ -96,12 +96,12 @@ function reasonFor(cause: PermissionCause, context: PermissionContext): string {
     const named = verdict.fired.map(
       ({ rule, probability }) => `“${rule.text}” (${percent(probability)})`,
     )
-    return `Auto-mode flagged this: it looks like it ${named.length === 1 ? 'matches' : 'matches each of'} ${named.join(', ')}.`
+    return `Flagged by your tool permissions: it looks like it ${named.length === 1 ? 'matches' : 'matches each of'} ${named.join(', ')}.`
   }
   if (cause === 'auto-mode-unavailable' && verdict?.kind === 'unavailable') {
-    return `Auto-mode could not decide (${verdict.reason}), so this is yours to decide.`
+    return `The tool permissions check could not decide (${verdict.reason}), so this is yours to decide.`
   }
-  return 'Auto-mode is not set up, so every call is put to you. Set it up from the top bar.'
+  return 'Tool permissions are not set up, so every call is put to you. Set them up from the top bar.'
 }
 
 function withBlockedPath(reason: string, blockedPath: string | null): string {

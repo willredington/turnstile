@@ -91,7 +91,7 @@ export function AutoModeSetup({
         setThreshold(next.policy?.threshold ?? DEFAULT_THRESHOLD)
       })
       .catch(() => {
-        if (live) setError('Could not load auto-mode settings.')
+        if (live) setError('Could not load tool permissions.')
       })
     return () => {
       live = false
@@ -175,9 +175,14 @@ export function AutoModeSetup({
   const kept = drafts.filter((draft) => draft.enabled && draft.text.trim() !== '').length
 
   return (
-    <div className="permission-overlay" role="dialog" aria-modal="true" aria-label="Auto-mode">
+    <div
+      className="permission-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Tool permissions"
+    >
       <div className="permission-card auto-mode-card">
-        <p className="challenge-kicker">Auto-mode</p>
+        <p className="challenge-kicker">Tool permissions</p>
         <h2 className="permission-title">When should the agent ask you first?</h2>
         <p className="permission-description">
           Every tool call is checked against these statements. If it looks like any of them, you're
