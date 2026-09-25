@@ -27,11 +27,9 @@ import type {
   RootRegistry,
   SaveResult,
   Session,
-  Telemetry,
 } from '../core/ports.ts'
 import { dequeue, enqueue, humanText, promptAhead } from '../core/queue.ts'
 import { skipReasons } from '../core/riskbar.ts'
-import { noopTelemetry, withAttributes } from '../core/telemetry.ts'
 import { appendEvent, appendNotice, appendPlan, appendUser } from '../core/transcript.ts'
 import type {
   AgentEvent,
@@ -84,11 +82,6 @@ export type SessionDeps = {
   /** Each session's file reviews, so a resume shows its last review again. */
   findings: FindingStore
   config: TurnstileConfig
-  /**
-   * Where the session reports its own timings and counts. Silent by default, which is what the
-   * whole test suite runs with and what a session runs with until exporting is configured.
-   */
-  telemetry?: Telemetry
   /** Called whenever state changes, so a transport can push. */
   onChange?: (state: SessionState) => void
   /** Called when an edit lands, so a diff view can refresh. */
@@ -117,15 +110,6 @@ const APPROVED_PROMPT =
 
 export function createSession(deps: SessionDeps): Session {
   const { annotations, hidden, editTarget, reviewer, config } = deps
-  /**
-   * Everything this session measures carries the session's id, which is how Turnstile's spans
-   * and the agent CLI's own end up joinable in the backend. Read through a function rather than
-   * captured, because `newSession`/`resumeSession` replace it while this process lives.
-   */
-  const telemetry = withAttributes(deps.telemetry ?? noopTelemetry, () => ({
-    'session.id': state.sessionId,
-  }))
-
   let state: SessionState = {
     status: 'starting',
     sessionId: '',
@@ -316,7 +300,6 @@ export function createSession(deps: SessionDeps): Session {
       roots: deps.roots,
       reviewer,
       riskBar: config.riskBar,
-      telemetry,
       reviewedHash: (root, path) => reviews.get(noteFileKey(root, path))?.fileHash,
       onReviewing: (root, paths) => {
         if (!live()) return
@@ -517,7 +500,6 @@ export function createSession(deps: SessionDeps): Session {
     const absolutePath = resolvePath(opened?.cwd ?? '', input.path)
     const handle = opened === null ? null : deps.roots.rootFor(absolutePath)
     if (handle === null) {
-      telemetry.count('turnstile.files.saved', { actor: 'agent', outcome: 'refused' })
       return {
         decision: 'reject',
         reasoning:
@@ -533,13 +515,11 @@ export function createSession(deps: SessionDeps): Session {
     const current = await editTarget.read(handle.root, path)
     const resolved = resolveEdit(path, current, input.oldText)
     if (!resolved.ok) {
-      telemetry.count('turnstile.files.saved', { actor: 'agent', outcome: 'refused' })
       return { decision: 'reject', reasoning: resolved.message }
     }
 
     const proposed = proposedContent(current, input.oldText, input.newText)
     await editTarget.write(handle.root, path, proposed)
-    telemetry.count('turnstile.files.saved', { actor: 'agent', outcome: 'ok' })
     afterPossibleEdit()
     return { decision: 'allow', fileContent: proposed }
   }
@@ -759,26 +739,24 @@ export function createSession(deps: SessionDeps): Session {
         return { base: '', files: [], error: null, branch: null }
       }
 
-      return telemetry.span('turnstile.diff', { 'turnstile.root': primary.root }, async () => {
-        try {
-          const board = await captureBoardFor(primary)
-          return {
-            base: board.base,
-            files: await diffFiles(primary, board.base, board.next, board.deltas),
-            error: null,
-            branch: board.resolution.branch,
-          }
-        } catch (error) {
-          // The pane says why rather than rendering an empty diff, which would read as "nothing
-          // changed" — the one thing it must never say incorrectly.
-          return {
-            base: '',
-            files: [],
-            error: error instanceof Error ? error.message : String(error),
-            branch: null,
-          }
+      try {
+        const board = await captureBoardFor(primary)
+        return {
+          base: board.base,
+          files: await diffFiles(primary, board.base, board.next, board.deltas),
+          error: null,
+          branch: board.resolution.branch,
         }
-      })
+      } catch (error) {
+        // The pane says why rather than rendering an empty diff, which would read as "nothing
+        // changed" — the one thing it must never say incorrectly.
+        return {
+          base: '',
+          files: [],
+          error: error instanceof Error ? error.message : String(error),
+          branch: null,
+        }
+      }
     },
 
     start,
@@ -894,11 +872,7 @@ export function createSession(deps: SessionDeps): Session {
     },
 
     async saveFile(file, text): Promise<SaveResult> {
-      // Tagged by actor, because "did my own edit land" and "did the agent's" are different
-      // questions, and the refusal outcomes are the ones worth being able to see at all: a save
-      // that quietly did not happen is the worst failure this surface can have.
       if (handleFor(file.root) === undefined) {
-        telemetry.count('turnstile.files.saved', { actor: 'human', outcome: 'refused' })
         return {
           ok: false,
           reason:
@@ -909,10 +883,8 @@ export function createSession(deps: SessionDeps): Session {
       try {
         await editTarget.write(file.root, file.path, text)
       } catch (error) {
-        telemetry.count('turnstile.files.saved', { actor: 'human', outcome: 'failed' })
         return { ok: false, reason: error instanceof Error ? error.message : String(error) }
       }
-      telemetry.count('turnstile.files.saved', { actor: 'human', outcome: 'ok' })
       afterPossibleEdit()
       return { ok: true }
     },
@@ -1165,9 +1137,6 @@ export function createSession(deps: SessionDeps): Session {
    */
   async function markDelivered(notes: Annotation[]): Promise<void> {
     if (notes.length === 0) return
-    // Counted here rather than in `sendNotes`, because this is the one point every note passes
-    // through on its way to the agent — including the ones a mid-turn send deferred.
-    telemetry.count('turnstile.notes.sent', {}, notes.length)
     await annotations
       .markSent(
         state.sessionId,

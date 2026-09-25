@@ -1,7 +1,6 @@
 import type { RiskBarConfig } from '../core/config.ts'
-import type { ReviewedFile, Reviewer, RootHandle, RootRegistry, Telemetry } from '../core/ports.ts'
+import type { ReviewedFile, Reviewer, RootHandle, RootRegistry } from '../core/ports.ts'
 import { skipReasons } from '../core/riskbar.ts'
-import { noopTelemetry } from '../core/telemetry.ts'
 import type { ReviewerUpdate, StoredReview } from '../core/types.ts'
 import { captureBoardFor, chunksOf, fileHashes } from './board.ts'
 
@@ -28,8 +27,6 @@ export type ReviewDeps = {
   riskBar: Pick<RiskBarConfig, 'alwaysReview' | 'neverReview' | 'specPaths'>
   /** The hash a file was last reviewed at, if it has been. */
   reviewedHash: (root: string, path: string) => string | undefined
-  /** Where the pass reports its own timings and counts. Silent by default. */
-  telemetry?: Telemetry
   /** A review started, over these files. */
   onReviewing?: (root: string, paths: string[]) => void
   /** The reviewer moved on a step, or made another call. */
@@ -50,15 +47,11 @@ const IDLE: ReviewResult = { reviewed: 0, skipped: null }
 
 /** One root's share of the pass. */
 async function reviewRoot(handle: RootHandle, deps: ReviewDeps): Promise<ReviewResult> {
-  const telemetry = deps.telemetry ?? noopTelemetry
   const { base, next, deltas } = await captureBoardFor(handle)
   if (deltas.length === 0) return IDLE
 
   const chunks = await chunksOf(handle.root, handle.snapshots, base, next, deltas)
   const skips = skipReasons(deltas, deps.riskBar)
-  if (skips.size > 0) {
-    telemetry.count('turnstile.review.files', { outcome: 'skipped' }, skips.size)
-  }
 
   const reviewable = new Set(
     chunks.filter((chunk) => chunk.analyzable && !skips.has(chunk.path)).map((chunk) => chunk.path),
@@ -90,29 +83,19 @@ async function reviewRoot(handle: RootHandle, deps: ReviewDeps): Promise<ReviewR
       patches.push(await handle.snapshots.patch(base, next, delta.path, delta.previousPath))
     }
 
-    const byFile = await telemetry.span(
-      'turnstile.review.model',
-      { 'turnstile.files': files.length },
-      () =>
-        deps.reviewer.review(
-          { root: handle.root, files, diff: capped(patches.join('\n')) },
-          (update) => deps.onProgress?.(handle.root, update),
-        ),
+    const byFile = await deps.reviewer.review(
+      { root: handle.root, files, diff: capped(patches.join('\n')) },
+      (update) => deps.onProgress?.(handle.root, update),
     )
 
     const reviewedAt = new Date().toISOString()
     const reviews = stale.map(({ delta, hash }): StoredReview => {
       const findings = byFile.get(delta.path) ?? []
-      for (const finding of findings) {
-        telemetry.count('turnstile.findings', { severity: finding.severity })
-      }
       return { root: handle.root, path: delta.path, fileHash: hash, findings, reviewedAt }
     })
-    telemetry.count('turnstile.review.files', { outcome: 'reviewed' }, reviews.length)
     deps.onReviewed?.(handle.root, reviews)
     return { reviewed: reviews.length, skipped: null }
   } catch (error) {
-    telemetry.count('turnstile.review.files', { outcome: 'failed' }, paths.length)
     deps.onFailed?.(handle.root, paths, error instanceof Error ? error.message : String(error))
     return IDLE
   }
@@ -134,20 +117,15 @@ function capped(diff: string): string {
  * mid-session, a git call errored) costs that root's review, never every other root's.
  */
 export async function review(deps: ReviewDeps): Promise<ReviewResult> {
-  // The reviewer is a `query()` of its own, and runs under this span — short-lived and scoped
-  // to one review, unlike the coding agent's, which is why it is safe as a parent here (see
-  // `adapters/otel/telemetry.ts`).
-  return (deps.telemetry ?? noopTelemetry).span('turnstile.review.run', {}, async () => {
-    const failures: string[] = []
-    let reviewed = 0
-    for (const handle of deps.roots.knownRoots()) {
-      try {
-        const result = await reviewRoot(handle, deps)
-        reviewed += result.reviewed
-      } catch (error) {
-        failures.push(`${handle.root}: ${error instanceof Error ? error.message : String(error)}`)
-      }
+  const failures: string[] = []
+  let reviewed = 0
+  for (const handle of deps.roots.knownRoots()) {
+    try {
+      const result = await reviewRoot(handle, deps)
+      reviewed += result.reviewed
+    } catch (error) {
+      failures.push(`${handle.root}: ${error instanceof Error ? error.message : String(error)}`)
     }
-    return { reviewed, skipped: failures.length > 0 ? failures.join('; ') : null }
-  })
+  }
+  return { reviewed, skipped: failures.length > 0 ? failures.join('; ') : null }
 }

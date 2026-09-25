@@ -9,7 +9,6 @@ import { STATE_DIR } from '../../src/core/config.ts'
 import type { Reviewer, ReviewInput, RootHandle, RootRegistry } from '../../src/core/ports.ts'
 import type { Finding, StoredReview } from '../../src/core/types.ts'
 import { gitIn, tempGitRepo } from '../support/gitRepo.ts'
-import { recordingTelemetry } from '../support/telemetry.ts'
 
 /** A fixed, single-root registry — `review()` only ever calls `knownRoots()`. */
 function singleRootRegistry(handle: RootHandle): RootRegistry {
@@ -260,59 +259,5 @@ describe('review', () => {
 
       expect(reviewer.inputs[0]?.files.map((file) => file.path)).toEqual(['src/app.ts'])
     })
-  })
-})
-
-/**
- * What the review pass reports about itself. The review is the part of a session that costs a
- * whole agent run, so it is the part worth being able to see.
- */
-describe('what the review measures', () => {
-  test('opens a span for the pass and one around the reviewer', async () => {
-    await Bun.write(join(repo, 'src/app.ts'), 'export const value = 2\n')
-    const telemetry = recordingTelemetry()
-
-    await review(depsFor(recording(), { telemetry }))
-
-    expect(telemetry.spansNamed('turnstile.review.run')).toHaveLength(1)
-    const model = telemetry.spansNamed('turnstile.review.model')
-    expect(model).toHaveLength(1)
-    expect(model[0]?.attrs['turnstile.files']).toBe(1)
-  })
-
-  test('counts reviewed files and each finding under its severity', async () => {
-    await Bun.write(join(repo, 'src/app.ts'), 'export const value = 2\n')
-    await Bun.write(join(repo, 'src/other.ts'), 'export const other = 2\n')
-    const telemetry = recordingTelemetry()
-
-    await review(depsFor(recording(), { telemetry }))
-
-    expect(telemetry.totalCounted('turnstile.review.files', { outcome: 'reviewed' })).toBe(2)
-    expect(telemetry.totalCounted('turnstile.findings', { severity: 'low' })).toBe(2)
-  })
-
-  test('counts a failed review as failed and marks its span failed', async () => {
-    await Bun.write(join(repo, 'src/app.ts'), 'export const value = 2\n')
-    const telemetry = recordingTelemetry()
-
-    await review(depsFor(failing, { telemetry }))
-
-    expect(telemetry.totalCounted('turnstile.review.files', { outcome: 'failed' })).toBe(1)
-    expect(telemetry.spansNamed('turnstile.review.model')[0]?.failed).toBe(true)
-  })
-
-  test('counts a file the risk bar skipped, and opens no reviewer span for it', async () => {
-    await Bun.write(join(repo, 'src/app.ts'), 'export const value = 2\n')
-    const telemetry = recordingTelemetry()
-
-    await review(
-      depsFor(recording(), {
-        telemetry,
-        riskBar: { alwaysReview: [], neverReview: ['src/**'], specPaths: [] },
-      }),
-    )
-
-    expect(telemetry.totalCounted('turnstile.review.files', { outcome: 'skipped' })).toBe(1)
-    expect(telemetry.spansNamed('turnstile.review.model')).toHaveLength(0)
   })
 })

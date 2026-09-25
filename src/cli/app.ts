@@ -14,15 +14,13 @@ import { createGitRepository } from '../adapters/git/repository.ts'
 import { createGitRootRegistry } from '../adapters/git/rootRegistry.ts'
 import { createModelAsker } from '../adapters/model/asker.ts'
 import { createModel, readApiKey } from '../adapters/model/client.ts'
-import { createOtelTelemetry } from '../adapters/otel/telemetry.ts'
 import { createTypeSafeJudge } from '../adapters/typesafe/judge.ts'
 import { serveApp } from '../adapters/web/server.ts'
 import { createAutoMode } from '../app/autoMode.ts'
 import { createSession } from '../app/session.ts'
 import { legacyRules } from '../core/autoMode.ts'
 import { STATE_DIR } from '../core/config.ts'
-import type { Asker, CallJudge, Session, Telemetry } from '../core/ports.ts'
-import { agentTelemetryEnv, noopTelemetry } from '../core/telemetry.ts'
+import type { Asker, CallJudge, Session } from '../core/ports.ts'
 import { watchParent } from './parentWatch.ts'
 
 /**
@@ -36,24 +34,6 @@ export async function runApp(): Promise<void> {
   const cwd = process.cwd()
 
   const config = await loadConfig(cwd)
-
-  /**
-   * Turnstile's own measurements, and the agent's.
-   *
-   * Two halves that meet in the backend rather than in this process. Turnstile's spans and
-   * counters go through the `Telemetry` port; the agent's spans, tokens and cost come from the
-   * Claude Code CLI, which is instrumented already and reads its configuration from the
-   * environment — `adapters/agent-sdk/client.ts` spreads `process.env` into the subprocess it
-   * spawns, so putting the variables here is the whole of that wiring. They are correlated by
-   * `session.id`, which both sides stamp on their own spans.
-   *
-   * Both are off unless `telemetry.enabled` is set, and neither can fail a session: a collector
-   * that is down costs the measurements and nothing else.
-   */
-  const telemetry: Telemetry = config.telemetry.enabled
-    ? createOtelTelemetry(config.telemetry)
-    : noopTelemetry
-  Object.assign(process.env, agentTelemetryEnv(config.telemetry))
 
   // A read-only view of the repository, for the asker's tools and the file explorer.
   const reader = createRepoReader()
@@ -156,7 +136,6 @@ export async function runApp(): Promise<void> {
     reviewer,
     findings: createFileFindingStore(cwd),
     config,
-    telemetry,
     onChange: (state) => broadcast(state as never),
   })
 
@@ -167,7 +146,6 @@ export async function runApp(): Promise<void> {
     reader,
     roots,
     cwd,
-    telemetry,
     autoMode,
   })
   broadcast = server.broadcast as (state: never) => void
@@ -177,13 +155,6 @@ export async function runApp(): Promise<void> {
   // `turnstile: <url>` on stdout is the one line the desktop app reads to find the server (see
   // `desktop/src-tauri/src/sidecar.rs`), so nothing else goes to stdout with that prefix.
   process.stdout.write(`turnstile: ${server.url}\n`)
-  // Off by default, and off looks exactly like an empty backend from the Grafana side — so say
-  // which one it is.
-  process.stderr.write(
-    config.telemetry.enabled
-      ? `Telemetry: exporting to ${config.telemetry.endpoint}\n`
-      : 'Telemetry: off (set "telemetry": { "enabled": true } in .turnstile/config.json)\n',
-  )
   if (session.state().tracking !== 'git') {
     process.stderr.write(
       'This directory is not a git repository, so no session was opened. ' +
@@ -201,8 +172,6 @@ export async function runApp(): Promise<void> {
     shuttingDown = true
     void (async () => {
       try {
-        // Bounded internally, so a stale endpoint cannot stop the process exiting.
-        await telemetry.flush()
         await roots.teardown()
       } finally {
         session.stop()

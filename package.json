@@ -12,13 +12,9 @@
     "simulate": "bun run scripts/simulate.ts",
     "desktop": "bun run --cwd desktop dev",
     "knip": "knip",
-    "knip:prod": "knip --config knip.production.json --include files",
-    "telemetry": "docker compose -f telemetry/compose.yaml up -d",
-    "telemetry:stop": "docker compose -f telemetry/compose.yaml down",
-    "telemetry:logs": "docker compose -f telemetry/compose.yaml logs -f"
+    "knip:prod": "knip --config knip.production.json --include files"
   },
   "dependencies": {
-    "@ai-sdk/otel": "1.0.85",
     "@anthropic-ai/claude-agent-sdk": "^0.3.232",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-css": "^6.3.1",
@@ -38,13 +34,6 @@
     "@codemirror/view": "^6.43.12",
     "@lezer/highlight": "^1.2.3",
     "@openrouter/ai-sdk-provider": "^3.0.0",
-    "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/exporter-metrics-otlp-http": "^0.222.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
-    "@opentelemetry/resources": "^2.11.0",
-    "@opentelemetry/sdk-metrics": "^2.11.0",
-    "@opentelemetry/sdk-trace-node": "^2.11.0",
-    "@opentelemetry/semantic-conventions": "^1.43.0",
     "@typesafe-ai/sdk": "^0.6.0",
     "ai": "^7.0.29",
     "dompurify": "^3.4.14",

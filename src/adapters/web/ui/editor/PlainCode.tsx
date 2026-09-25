@@ -5,13 +5,11 @@ import { EditorView, keymap } from '@codemirror/view'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DocumentPlan } from '../../../../core/documentPlan.ts'
 import { pathToLanguage } from '../../../../core/language.ts'
-import { sharedReporter } from '../telemetry.ts'
 import { decorationField, decorationsFor, setDecorations } from './decorations.ts'
 import { codeHighlight } from './highlight.ts'
 import { hostPortals, useHosts } from './hosts.tsx'
 import { languageFor } from './language.ts'
 import { useMarkup } from './markup.tsx'
-import { timedDispatch } from './measure.ts'
 import { type NoteTarget, SaveBar } from './parts.tsx'
 import { recallScroll, rememberScroll } from './scrollMemory.ts'
 import type { Ask } from './useAsk.ts'
@@ -110,11 +108,6 @@ export function PlainCode({
       ],
     })
 
-    // Timed so the per-keystroke cost that decided this architecture stays visible, and so
-    // opening a large file reports what laying it out actually took.
-    const attrs = { language: pathToLanguage(path) ?? 'plain', surface: 'tree' }
-    const reporter = sharedReporter()
-    const startedBuild = performance.now()
     const created = new EditorView({
       state,
       parent: host,
@@ -122,9 +115,7 @@ export function PlainCode({
       // measure pass, after forcing the viewport to cover the line it names — which is why it
       // is handed to the constructor rather than dispatched once the view is up.
       scrollTo: recallScroll(scrollKey),
-      dispatchTransactions: timedDispatch(reporter, attrs),
     })
-    reporter.measure('editor.build', performance.now() - startedBuild, attrs)
     view.current = created
 
     // Recorded as the reader scrolls, not on the way out. React mutates the DOM before it

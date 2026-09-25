@@ -8,9 +8,7 @@ import type {
   RepoReader,
   RootRegistry,
   Session,
-  Telemetry,
 } from '../../core/ports.ts'
-import { noopTelemetry, parseBrowserMeasurements, withAttributes } from '../../core/telemetry.ts'
 import type { FileRef, SessionState } from '../../core/types.ts'
 import index from './ui/index.html'
 
@@ -42,8 +40,6 @@ export type ServerOptions = {
   roots: RootRegistry
   /** The directory Turnstile was launched in, for the status line's abbreviated `cwd`. */
   cwd: string
-  /** Where measurements the browser reports are exported. Silent by default. */
-  telemetry?: Telemetry
   /**
    * Auto-mode's setup screen: the saved policy, saving a new one, and dry runs. Absent, the
    * routes answer 404 and the page offers no setup.
@@ -111,15 +107,6 @@ function historyFrom(value: unknown): { question: string; answer: string }[] | u
 
 export function serveApp(options: ServerOptions) {
   const { session, projectTree, asker, reader, roots, cwd } = options
-  /**
-   * Measurements arriving from the browser are stamped with the live session, the same way the
-   * session stamps its own — `session.id` is what joins Turnstile's spans to the agent CLI's, so
-   * a keystroke latency that did not carry it could not be placed in the session it was typed
-   * in. Read per call, since a resume replaces the session under a long-lived server.
-   */
-  const telemetry = withAttributes(options.telemetry ?? noopTelemetry, () => ({
-    'session.id': session.state().sessionId,
-  }))
   const sockets = new Set<Socket>()
 
   /**
@@ -460,45 +447,21 @@ export function serveApp(options: ServerOptions) {
           }
 
           try {
-            const answer = await telemetry.span(
-              'turnstile.ask',
-              { 'turnstile.path': file.path, 'turnstile.ask.followup': history.length > 0 },
-              () =>
-                asker.ask({
-                  root: file.root,
-                  payload: askPayload({
-                    path: file.path,
-                    fileText: contents.text,
-                    anchor,
-                    history,
-                    question,
-                  }),
-                  reader,
-                }),
-            )
-            telemetry.count('turnstile.ask.questions', { outcome: 'answered' })
+            const answer = await asker.ask({
+              root: file.root,
+              payload: askPayload({
+                path: file.path,
+                fileText: contents.text,
+                anchor,
+                history,
+                question,
+              }),
+              reader,
+            })
             return json({ answer })
           } catch (error) {
-            telemetry.count('turnstile.ask.questions', { outcome: 'failed' })
             return json({ error: error instanceof Error ? error.message : String(error) }, 409)
           }
-        },
-      },
-
-      /**
-       * Measurements taken in the browser — keystroke latency above all, which can only be
-       * timed where the keystroke lands. Batched by the editor, validated in
-       * `core/telemetry.ts` (an unbounded metric name from outside the process would be a
-       * cardinality problem, not just an invalid one), and always answered `ok`: a dropped
-       * measurement must never become an error on the reader's screen.
-       */
-      '/telemetry': {
-        POST: async (request: Request) => {
-          const parsed = await body(request)
-          for (const measurement of parseBrowserMeasurements(parsed)) {
-            telemetry.record(measurement.name, measurement.value, measurement.attrs)
-          }
-          return json({ ok: true })
         },
       },
 

@@ -475,8 +475,7 @@ agent that builds a project before anyone has written a `.gitignore` doesn't flo
   "riskBar": { "alwaysReview": [], "neverReview": [], "specPaths": [] },
   "typesafe": { "apiKeyEnv": "TYPESAFE_API_KEY", "model": "jev-latest", "timeoutMs": 5000 },
   "untrackedExcludes": ["target/", "node_modules/", "dist/", "build/", ".venv/", "__pycache__/"],
-  "openrouter": { "apiKeyEnv": "OPENROUTER_API_KEY" },
-  "telemetry": { "enabled": false, "endpoint": "http://127.0.0.1:4318" }
+  "openrouter": { "apiKeyEnv": "OPENROUTER_API_KEY" }
 }
 ```
 
@@ -512,88 +511,6 @@ whichever one serves. The model must support tool calling. If you set `ask.model
 `untrackedExcludes` lists gitignore-style patterns for untracked files that never reach the
 list, on top of your own ignore rules. Setting it replaces the default list rather than adding
 to it. Files git already tracks aren't affected.
-
-### Telemetry
-
-Off by default. Turned on, Turnstile exports OpenTelemetry over OTLP/HTTP to `endpoint`:
-
-```json
-{ "telemetry": { "enabled": true, "endpoint": "http://127.0.0.1:4318" } }
-```
-
-To look at it, start the bundled backend (`telemetry/compose.yaml` — Grafana's all-in-one OTLP
-stack, which needs no configuration):
-
-```bash
-bun run telemetry          # start it
-bun run telemetry:stop     # stop it
-bun run telemetry:logs     # follow its logs
-```
-
-Grafana is then on http://localhost:3000 (admin/admin), with traces in Tempo, metrics in
-Prometheus and logs in Loki. **Dashboards → Turnstile** puts it together, per session or across
-all of them: the agent's cost, tokens and events, review and question outcomes, keystroke latency,
-and tables of failed model runs and recent turns that open straight into their traces. It is
-provisioned from `telemetry/grafana/turnstile-dashboard.json`; edits in the UI are allowed but not
-saved back, so export over that file to keep one. History lives in a named volume, so it survives a restart;
-`docker compose -f telemetry/compose.yaml down -v` is what throws it away. Turn telemetry on, run a session, and **Explore → Tempo → search by
-service** shows both `turnstile` and `claude-code`; filtering a trace on `session.id` puts the
-review that ran next to the turn that caused it.
-
-Queries worth having, all verified against a real session:
-
-```promql
-sum(claude_code_cost_usage_USD_total)                      # what the agent has cost
-sum by (type) (claude_code_token_usage_tokens_total)       # input/output/cacheRead/cacheCreation
-sum by (outcome) (turnstile_review_files_total)            # reviewed vs failed vs skipped
-sum by (severity) (turnstile_findings_total)               # what the reviewer is finding
-sum by (actor, outcome) (turnstile_files_saved_total)      # your saves vs the agent's
-turnstile_editor_keystroke_latency_sum
-  / turnstile_editor_keystroke_latency_count               # mean keystroke cost, ms
-```
-
-Two things export, and they meet in the backend rather than in Turnstile:
-
-- **Turnstile**, as `service.name=turnstile`. Spans for the review pass
-  (`turnstile.review.run`, with `turnstile.review.model` around the reviewer's run), for
-  `turnstile.diff`, and `turnstile.ask` per question. Under each question, the AI SDK's own
-  spans for the run, each step, each model request and each tool call — model, finish reason,
-  tokens and tool names, never the prompt or reply — which is where to look when a question
-  comes back unanswered. Counters for `turnstile.review.files` (by outcome: reviewed, failed or
-  skipped), `turnstile.findings` (by severity), `turnstile.files.saved` (by actor — yours or
-  the agent's — and outcome), `turnstile.notes.sent` and `turnstile.ask.questions` (by
-  outcome: answered or failed). Histograms, in milliseconds, for
-  `turnstile.editor.build` and `turnstile.editor.keystroke.latency`, measured in the app's
-  window where the keystroke actually lands, and batched to Turnstile's process.
-- **The agent**, as `service.name=claude-code`. The Claude Code CLI is instrumented already, so
-  its per-turn spans, model requests, tool calls, tokens and cost come from setting its
-  environment rather than from any code here. `"agent": false` leaves it alone.
-
-Both stamp `session.id`, which is what joins them: filter on it to see the review that ran
-alongside a turn. They are correlated rather than nested, because the agent SDK opens one
-long-lived connection per session — nesting would hang every turn of a multi-hour session off a
-single span.
-
-Turnstile asks the agent CLI for **cumulative** metrics
-(`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`). Without that, Prometheus's OTLP ingest
-accepts the agent's metrics and then discards them — cost and tokens included — while Turnstile's
-own land normally. It is set for you; the note is here because the symptom (half the metrics
-missing, no error anywhere) is otherwise very hard to place.
-
-Other fields: `serviceName` (default `turnstile`), `traces` and `metrics` to turn off a signal
-(for Turnstile and the agent alike; the agent's logs are always exported while `agent` is on),
-`headers` (`key=value,key=value`) for a collector wanting an `Authorization` header, and
-`diagnostics` to report export failures instead of dropping telemetry silently — worth turning
-on the first time you point at a new collector.
-
-**Nothing you write or say is exported.** Durations, counts, the repository root on diff spans,
-the file path on a question's span, model and tool names. Review spans carry a file count, not
-paths. Not prompts, not file contents, not API bodies. Claude Code can export those
-through four `OTEL_LOG_*` variables; Turnstile never sets them, so enabling them is something
-you do deliberately in your own shell.
-
-A collector that is down costs the measurements and nothing else: flushes are time-bounded, so
-a stale `endpoint` cannot delay a session or stop the process exiting.
 
 ### Two config locations
 

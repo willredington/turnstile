@@ -26,7 +26,6 @@ import type {
   StoredReview,
 } from '../../src/core/types.ts'
 import { fakeRepository } from '../support/gitRepo.ts'
-import { type RecordingTelemetry, recordingTelemetry } from '../support/telemetry.ts'
 
 /**
  * The session, with every port faked.
@@ -303,7 +302,6 @@ function harness(
     reviewer?: Reviewer
     findings?: FindingStore & { stored: Map<string, StoredReview[]> }
     openAt?: SessionDeps['openAt']
-    telemetry?: RecordingTelemetry
   } = {},
 ) {
   const connection = fakeConnection(options.stopReasons)
@@ -332,7 +330,6 @@ function harness(
     },
     findings,
     config: DEFAULT_CONFIG,
-    ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),
   }
   return {
     session: createSession(deps),
@@ -1767,145 +1764,5 @@ describe('editing a file yourself', () => {
     await settle()
 
     expect(session.state().annotations).toEqual([])
-  })
-})
-
-/**
- * What a session reports about itself.
- *
- * Counters rather than spans for the lifecycle, deliberately: the agent SDK opens one
- * long-lived `query()` per session and inherits any span active at that moment as the parent of
- * every turn it will ever run, so a span around the session's opening would collect hours of
- * agent work under one short bar. Correlation happens on `session.id` instead — see
- * `adapters/otel/telemetry.ts`.
- */
-describe('what a session measures', () => {
-  const FILE = 'export const value = 2\nexport const other = 9\n'
-
-  test('counts the reader s own save, tagged as the human s', async () => {
-    const telemetry = recordingTelemetry()
-    const { session } = harness({ files: { 'src/a.ts': FILE }, telemetry })
-    await session.start()
-
-    await session.saveFile({ root: ROOT, path: 'src/a.ts' }, 'export const value = 3\n')
-
-    expect(telemetry.totalCounted('turnstile.files.saved', { actor: 'human', outcome: 'ok' })).toBe(
-      1,
-    )
-  })
-
-  /** A refusal is the interesting half: it is the case that used to fail silently. */
-  test('counts a refused save as refused, not as a save', async () => {
-    const telemetry = recordingTelemetry()
-    const { session } = harness({ files: { 'src/a.ts': FILE }, telemetry })
-    await session.start()
-
-    await session.saveFile({ root: '/somewhere/else', path: 'src/a.ts' }, 'clobbered')
-
-    expect(
-      telemetry.totalCounted('turnstile.files.saved', { actor: 'human', outcome: 'refused' }),
-    ).toBe(1)
-    expect(telemetry.totalCounted('turnstile.files.saved', { actor: 'human', outcome: 'ok' })).toBe(
-      0,
-    )
-  })
-
-  test('counts a write that threw as failed', async () => {
-    const telemetry = recordingTelemetry()
-    const { session, editTarget } = harness({ files: { 'src/a.ts': FILE }, telemetry })
-    await session.start()
-    editTarget.write = async () => {
-      throw new Error('read-only file system')
-    }
-
-    await session.saveFile({ root: ROOT, path: 'src/a.ts' }, 'next')
-
-    expect(
-      telemetry.totalCounted('turnstile.files.saved', { actor: 'human', outcome: 'failed' }),
-    ).toBe(1)
-  })
-
-  /** Telling the agent's writes from the reader's is the point of tagging an actor at all. */
-  test('counts the agent s write separately from the reader s', async () => {
-    const telemetry = recordingTelemetry()
-    const { session } = harness({ files: { 'src/a.ts': FILE }, telemetry })
-    await session.start()
-
-    await session.writeFile({
-      path: 'src/a.ts',
-      oldText: FILE,
-      newText: 'export const value = 9\n',
-    })
-
-    expect(telemetry.totalCounted('turnstile.files.saved', { actor: 'agent', outcome: 'ok' })).toBe(
-      1,
-    )
-    expect(telemetry.totalCounted('turnstile.files.saved', { actor: 'human' })).toBe(0)
-  })
-
-  test('counts a write the agent was refused', async () => {
-    const telemetry = recordingTelemetry()
-    const { session } = harness({ files: { 'src/a.ts': FILE }, telemetry })
-    await session.start()
-
-    await session.writeFile({
-      path: 'src/a.ts',
-      oldText: 'text that is not in the file',
-      newText: 'whatever',
-    })
-
-    expect(
-      telemetry.totalCounted('turnstile.files.saved', { actor: 'agent', outcome: 'refused' }),
-    ).toBe(1)
-  })
-
-  test('counts how many notes a send actually delivered', async () => {
-    const telemetry = recordingTelemetry()
-    const { session } = harness({ files: { 'src/a.ts': FILE }, telemetry })
-    await session.start()
-    await session.annotate({ ...NOTE, body: 'one' })
-    await session.annotate({ ...NOTE, body: 'two' })
-
-    await session.sendNotes()
-
-    expect(telemetry.totalCounted('turnstile.notes.sent')).toBe(2)
-  })
-
-  test('counts nothing when a send carries no notes', async () => {
-    const telemetry = recordingTelemetry()
-    const { session } = harness({ files: { 'src/a.ts': FILE }, telemetry })
-    await session.start()
-
-    await session.send('just a message')
-
-    expect(telemetry.totalCounted('turnstile.notes.sent')).toBe(0)
-  })
-
-  /**
-   * The attribute that makes Turnstile's measurements and the agent's one picture: the CLI
-   * stamps `session.id` on its own spans, so this is what a backend joins on.
-   */
-  test('stamps the session id on everything it measures', async () => {
-    const telemetry = recordingTelemetry()
-    const { session } = harness({ files: { 'src/a.ts': FILE }, telemetry })
-    await session.start()
-    const id = session.state().sessionId
-    expect(id).not.toBe('')
-
-    await session.saveFile({ root: ROOT, path: 'src/a.ts' }, 'next')
-    await session.diff()
-
-    expect(telemetry.counts[0]?.attrs['session.id']).toBe(id)
-    expect(telemetry.spansNamed('turnstile.diff')[0]?.attrs['session.id']).toBe(id)
-  })
-
-  test('times building the diff view', async () => {
-    const telemetry = recordingTelemetry()
-    const { session } = harness({ files: { 'src/a.ts': FILE }, telemetry })
-    await session.start()
-
-    await session.diff()
-
-    expect(telemetry.spansNamed('turnstile.diff')).toHaveLength(1)
   })
 })

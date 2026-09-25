@@ -89,29 +89,6 @@ const DEFAULT_UNTRACKED_EXCLUDES = [
   '__pycache__/',
 ] as const
 
-const TelemetryConfigSchema = z.object({
-  /** Off unless asked for. Nothing is exported, and the agent CLI is left unconfigured. */
-  enabled: z.boolean().default(false),
-  /** An OTLP endpoint — a local collector by default. `jaegertracing/all-in-one` listens here. */
-  endpoint: z.string().min(1).default('http://127.0.0.1:4318'),
-  /** How Turnstile's own spans are named in the backend. The agent's stay `claude-code`. */
-  serviceName: z.string().min(1).default('turnstile'),
-  traces: z.boolean().default(true),
-  metrics: z.boolean().default(true),
-  /** Also configure the agent CLI's built-in instrumentation, not just Turnstile's own. */
-  agent: z.boolean().default(true),
-  /** `key=value,key=value`, for a collector that wants an Authorization header. */
-  headers: z.string().optional(),
-  /**
-   * Report exporter failures instead of dropping telemetry silently. Worth turning on the
-   * first time you point Turnstile at a new collector, since the quiet failure is otherwise
-   * indistinguishable from an app that emits nothing.
-   */
-  diagnostics: z.boolean().default(false),
-})
-
-export type TelemetryConfig = z.infer<typeof TelemetryConfigSchema>
-
 export const ConfigSchema = z.object({
   /** The reviewer: a read-only Claude Code run over the files each turn changed. */
   review: ReviewConfigSchema.default({ maxTurns: 60, timeoutMs: 600_000 }),
@@ -144,16 +121,6 @@ export const ConfigSchema = z.object({
   openrouter: z
     .object({ apiKeyEnv: z.string().min(1).default('OPENROUTER_API_KEY') })
     .default({ apiKeyEnv: 'OPENROUTER_API_KEY' }),
-  /** Where Turnstile's own measurements go, and whether they are taken at all. */
-  telemetry: TelemetryConfigSchema.default({
-    enabled: false,
-    endpoint: 'http://127.0.0.1:4318',
-    serviceName: 'turnstile',
-    traces: true,
-    metrics: true,
-    agent: true,
-    diagnostics: false,
-  }),
 })
 
 export type TurnstileConfig = z.infer<typeof ConfigSchema>

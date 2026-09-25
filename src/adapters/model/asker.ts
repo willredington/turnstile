@@ -1,7 +1,6 @@
 import { generateText, isStepCount, type LanguageModel } from 'ai'
 import type { AskConfig } from '../../core/config.ts'
 import type { Asker } from '../../core/ports.ts'
-import { runTelemetry } from './client.ts'
 import { ASK_SYSTEM_PROMPT } from './prompts.ts'
 import { readOnlyTools } from './tools.ts'
 
@@ -49,7 +48,6 @@ export function createModelAsker(model: LanguageModel, config: AskConfig): Asker
                 }
               : {},
           abortSignal: deadline,
-          telemetry: runTelemetry('turnstile.ask'),
         })
 
         // The LAST step's text, not `result.text`. A model that narrates while it works ("now

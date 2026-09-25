@@ -47,16 +47,3 @@ export function readApiKey(env: NodeJS.ProcessEnv, variable: string): string {
   }
   return key
 }
-
-/**
- * What a model run reports to the AI SDK's telemetry: one span per run, step, model call and
- * tool call, with model, finish reasons, token usage and tool names — and never the prompts or
- * the replies. Those carry file contents and the reader's own questions, and the README promises
- * that nothing written or said is exported.
- *
- * Inert until an integration is registered (`adapters/otel/telemetry.ts` does, when telemetry is
- * enabled), so this costs nothing with telemetry off.
- */
-export function runTelemetry(functionId: string) {
-  return { functionId, recordInputs: false, recordOutputs: false }
-}

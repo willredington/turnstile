@@ -14,7 +14,6 @@ import type {
   Session,
 } from '../../../src/core/ports.ts'
 import type { Annotation, SessionState } from '../../../src/core/types.ts'
-import { type RecordingTelemetry, recordingTelemetry } from '../../support/telemetry.ts'
 
 /** The real `serveApp`, bound to an ephemeral port, hit with a real `fetch`. */
 
@@ -1212,103 +1211,6 @@ describe('broadcast', () => {
       // If this left a live timer, the test process would not exit.
       expect(() => server.stop()).not.toThrow()
     })
-  })
-})
-
-/**
- * The bridge for measurements taken in the browser.
- *
- * Keystroke latency is the number the move to CodeMirror was about, and it can only be measured
- * where the keystroke lands. The editor batches its timings and posts them here to be exported
- * with everything else.
- */
-describe('/telemetry', () => {
-  const serve = (telemetry: RecordingTelemetry) =>
-    serveApp({
-      session: fakeSession({ state: () => ({ ...SOME_STATE, sessionId: 'sess-42' }) }),
-      projectTree: fakeProjectTree,
-      asker: fakeAsker,
-      reader: fakeReader,
-      roots: ONE_ROOT,
-      cwd: '/repo',
-      port: 0,
-      telemetry,
-    })
-
-  const report = (url: string, body: unknown) =>
-    fetch(`${url}telemetry`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-
-  test('records what the editor measured', async () => {
-    const telemetry = recordingTelemetry()
-    const server = serve(telemetry)
-    try {
-      const response = await report(server.url.toString(), {
-        measurements: [
-          { name: 'editor.keystroke.latency', value: 1.2, attrs: { language: 'typescript' } },
-        ],
-      })
-
-      expect(response.ok).toBe(true)
-      expect(telemetry.records).toEqual([
-        {
-          name: 'turnstile.editor.keystroke.latency',
-          value: 1.2,
-          attrs: { language: 'typescript', 'session.id': 'sess-42' },
-        },
-      ])
-    } finally {
-      server.stop()
-    }
-  })
-
-  /** A measurement is never worth an error on the reader's screen. */
-  test('accepts a malformed report without recording anything or failing', async () => {
-    const telemetry = recordingTelemetry()
-    const server = serve(telemetry)
-    try {
-      const response = await report(server.url.toString(), { measurements: 'nonsense' })
-
-      expect(response.ok).toBe(true)
-      expect(telemetry.records).toEqual([])
-    } finally {
-      server.stop()
-    }
-  })
-
-  /**
-   * Without this, a keystroke latency could not be lined up with the session it was typed in —
-   * and `session.id` is the attribute the agent's own spans carry, so it is the join.
-   */
-  test('stamps the live session s id on what the browser reported', async () => {
-    const telemetry = recordingTelemetry()
-    const server = serve(telemetry)
-    try {
-      await report(server.url.toString(), {
-        measurements: [{ name: 'editor.build', value: 9 }],
-      })
-
-      expect(telemetry.records[0]?.attrs['session.id']).toBe('sess-42')
-    } finally {
-      server.stop()
-    }
-  })
-
-  test('ignores a measurement name it does not know', async () => {
-    const telemetry = recordingTelemetry()
-    const server = serve(telemetry)
-    try {
-      await report(server.url.toString(), {
-        measurements: [{ name: 'invented.metric', value: 1 }],
-      })
-
-      expect(telemetry.records).toEqual([])
-    } finally {
-      server.stop()
-    }
   })
 })
 

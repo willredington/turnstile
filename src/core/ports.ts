@@ -526,35 +526,6 @@ export interface HiddenFileStore {
   show(sessionId: string, root: string, path: string): Promise<void>
 }
 
-/** What may be attached to a measurement. Deliberately flat and primitive: these become
- *  OpenTelemetry attributes, which are dimensions on a metric, not a place for payloads. */
-export type Attributes = Record<string, string | number | boolean>
-
-/**
- * Where Turnstile's own measurements go (`adapters/otel/telemetry.ts`).
- *
- * Only Turnstile's half. The agent's spans, tokens and cost come from the Claude Code CLI's
- * own OpenTelemetry instrumentation, which needs configuration rather than code — see
- * `agentTelemetryEnv` in `core/telemetry.ts`.
- *
- * The contract that matters is that measuring changes nothing: `span` returns the work's own
- * result and lets its failures through untouched, and no method here may throw. A session run
- * with the no-op must behave exactly like one run against a live collector.
- */
-export interface Telemetry {
-  /** Time `work`, tagging the span with `attrs`. Returns whatever `work` returned. */
-  span<T>(name: string, attrs: Attributes, work: () => Promise<T>): Promise<T>
-  /** Add to a counter — how often something happened. */
-  count(name: string, attrs?: Attributes, value?: number): void
-  /**
-   * Record one observation in a distribution: a duration measured somewhere Turnstile does not
-   * control the call (the browser's keystroke latency), or a size worth a histogram.
-   */
-  record(name: string, value: number, attrs?: Attributes): void
-  /** Push anything buffered to the collector. Called before the process exits. */
-  flush(): Promise<void>
-}
-
 /**
  * Asks, for one tool call, how likely it is to do what each of the user's auto-mode statements
  * describes (`adapters/typesafe/judge.ts`, one TypeSafe Noul per rule in a single request).
