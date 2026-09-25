@@ -551,6 +551,7 @@ let state: SessionState = {
   contextSize: 200_000,
   planMode: 'default',
   planReview: null,
+  review: null,
 }
 
 type Listener = (next: SessionState) => void
@@ -645,22 +646,54 @@ const fakeSession: Session = {
   hideFile: async (file: FileRef) => {
     commit({ hidden: [...state.hidden, file] })
   },
-  // Every unreviewed chunk goes under review, and a moment later comes back clean.
+  // Every unreviewed chunk goes under review, and walks the progress bar through each step —
+  // a few scripted calls while investigating — before coming back clean.
   reviewNow: () => {
+    const files = [
+      ...new Set(state.chunks.filter((c) => c.status === 'pending').map((c) => c.path)),
+    ]
     commit({
       chunks: state.chunks.map((chunk) =>
         chunk.status === 'pending' ? { ...chunk, status: 'analyzing', reason: null } : chunk,
       ),
+      review: {
+        step: 'preparing',
+        files,
+        startedAt: new Date().toISOString(),
+        timeoutMs: 600_000,
+        toolCalls: 0,
+        current: null,
+      },
     })
-    setTimeout(() => {
-      commit({
-        chunks: state.chunks.map((chunk) =>
-          chunk.status === 'analyzing' && chunk.analysis === null
-            ? { ...chunk, status: 'ready', analysis: { riskLevel: 'none', findings: [] } }
-            : chunk,
-        ),
-      })
-    }, 1500)
+    const steps: Array<Partial<NonNullable<SessionState['review']>>> = [
+      { step: 'starting' },
+      { step: 'investigating' },
+      { toolCalls: 1, current: 'reading src/core/riskbar.ts' },
+      { toolCalls: 2, current: 'searching for skipReason' },
+      { toolCalls: 3, current: 'running git log -5 --oneline' },
+      { step: 'submitting', current: 'submitting findings' },
+    ]
+    steps.forEach((next, i) => {
+      setTimeout(
+        () => {
+          if (state.review !== null) commit({ review: { ...state.review, ...next } })
+        },
+        (i + 1) * 1200,
+      )
+    })
+    setTimeout(
+      () => {
+        commit({
+          review: null,
+          chunks: state.chunks.map((chunk) =>
+            chunk.status === 'analyzing' && chunk.analysis === null
+              ? { ...chunk, status: 'ready', analysis: { riskLevel: 'none', findings: [] } }
+              : chunk,
+          ),
+        })
+      },
+      (steps.length + 1) * 1200,
+    )
   },
   showFile: async (file: FileRef) => {
     commit({

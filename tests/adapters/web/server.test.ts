@@ -139,6 +139,7 @@ const SOME_STATE: SessionState = {
   contextSize: 200000,
   planMode: 'default',
   planReview: null,
+  review: null,
   tracking: 'git',
   baseline: null,
 }

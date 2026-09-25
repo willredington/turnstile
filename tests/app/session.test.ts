@@ -682,6 +682,51 @@ describe('the write tool', () => {
 })
 
 describe('the review', () => {
+  test('its progress is in state while it runs, step by step, and gone once it ends', async () => {
+    let release: () => void = () => {}
+    const { session, connection, snapshots } = harness({
+      reviewer: {
+        review: async (input, onProgress) => {
+          onProgress?.({ step: 'investigating', toolCalls: 1, current: 'reading src/a.ts' })
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+          return new Map(input.files.map((file) => [file.path, []]))
+        },
+      },
+    })
+    await session.start()
+    connection.duringPrompt(() => snapshots.setDeltas([delta('src/a.ts')]))
+    await session.send('go')
+    await until(() => session.state().review?.step === 'investigating')
+
+    expect(session.state().review).toMatchObject({
+      files: ['src/a.ts'],
+      toolCalls: 1,
+      current: 'reading src/a.ts',
+      timeoutMs: DEFAULT_CONFIG.review.timeoutMs,
+    })
+
+    release()
+    await until(() => session.state().chunks[0]?.status === 'ready')
+    expect(session.state().review).toBeNull()
+  })
+
+  test('a failed review leaves no progress behind', async () => {
+    const { session, connection, snapshots } = harness({
+      reviewer: {
+        review: async () => {
+          throw new Error('claude exited with code 1')
+        },
+      },
+    })
+    await session.start()
+    connection.duringPrompt(() => snapshots.setDeltas([delta('src/a.ts')]))
+    await session.send('go')
+    await settle()
+    expect(session.state().review).toBeNull()
+  })
+
   /** A failure used to leave the chunk on "analyzing" forever, looking like a check never run. */
   test('a failed review is reported on the chunk, and retried by reviewNow', async () => {
     let fail = true

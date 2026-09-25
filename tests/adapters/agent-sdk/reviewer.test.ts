@@ -12,7 +12,7 @@ import {
   reviewPrompt,
 } from '../../../src/adapters/agent-sdk/reviewer.ts'
 import type { ReviewInput } from '../../../src/core/ports.ts'
-import type { Finding } from '../../../src/core/types.ts'
+import type { Finding, ReviewerUpdate } from '../../../src/core/types.ts'
 
 /**
  * The reviewer adapter, driven by a scripted `query()` rather than a real subprocess. The fake
@@ -129,6 +129,47 @@ describe('connectReviewer', () => {
         })
       })()) as unknown as Parameters<typeof connectReviewer>[0]['queryFn']
     await expect(reviewer(queryFn, 20).review(INPUT)).rejects.toThrow('timed out')
+  })
+
+  test('reports each step, and each call once, as the run makes it', async () => {
+    const toolUse = (id: string, name: string, input: unknown) =>
+      ({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id, name, input }] },
+      }) as unknown as SDKMessage
+    const queryFn = ((params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) =>
+      (async function* () {
+        await params.prompt[Symbol.asyncIterator]().next()
+        yield { type: 'system', subtype: 'init' } as unknown as SDKMessage
+        yield toolUse('t1', 'Read', { file_path: `${ROOT}/src/a.ts` })
+        // The same block again, as the SDK can send it: counted once.
+        yield toolUse('t1', 'Read', { file_path: `${ROOT}/src/a.ts` })
+        yield toolUse('t2', 'Grep', { pattern: 'dropped' })
+        yield toolUse('t3', 'mcp__review__submit_findings', { findings: [] })
+        await callTool(params.options, { findings: [] })
+        yield result()
+      })()) as unknown as Parameters<typeof connectReviewer>[0]['queryFn']
+
+    const updates: ReviewerUpdate[] = []
+    await reviewer(queryFn).review(INPUT, (update) => updates.push(update))
+
+    expect(updates).toEqual([
+      { step: 'starting', toolCalls: 0, current: null },
+      { step: 'investigating', toolCalls: 0, current: null },
+      { step: 'investigating', toolCalls: 1, current: 'reading src/a.ts' },
+      { step: 'investigating', toolCalls: 2, current: 'searching for dropped' },
+      { step: 'submitting', toolCalls: 2, current: 'submitting findings' },
+    ])
+  })
+
+  test('a progress listener that throws does not cost the review', async () => {
+    const { queryFn } = scriptedQuery(async (options) => {
+      await callTool(options, { findings: [] })
+    })
+    const byFile = await reviewer(queryFn).review(INPUT, () => {
+      throw new Error('listener broke')
+    })
+    expect([...byFile.keys()]).toEqual(['src/a.ts', 'src/b.ts'])
   })
 
   test('runs read-only, out of the session history, with the repository’s own setup', async () => {

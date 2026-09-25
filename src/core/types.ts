@@ -165,6 +165,32 @@ export type StoredReview = {
   reviewedAt: string
 }
 
+/**
+ * The steps every review goes through, in order. The agent inside a review wanders — how many
+ * files it reads is its own business — but the run around it always has this shape, which is
+ * what the review progress bar counts.
+ */
+export const REVIEW_STEPS = ['preparing', 'starting', 'investigating', 'submitting'] as const
+export type ReviewStep = (typeof REVIEW_STEPS)[number]
+
+/** What the reviewer reports as it runs. `current` is the call it made last, in a few words. */
+export type ReviewerUpdate = {
+  step: Exclude<ReviewStep, 'preparing'>
+  toolCalls: number
+  current: string | null
+}
+
+/** The review in flight, as the progress bar shows it. */
+export type ReviewProgress = {
+  step: ReviewStep
+  files: string[]
+  startedAt: string
+  /** When the review gives up, counted from `startedAt`. */
+  timeoutMs: number
+  toolCalls: number
+  current: string | null
+}
+
 /** Findings on a changed file that do not land on any of its chunks. */
 export type FileFindings = {
   root: string
@@ -462,6 +488,8 @@ export type SessionState = {
   /** Present only while a submitted plan is awaiting a human decision — the turn is blocked on
    *  the agent's `ExitPlanMode` call until this resolves. */
   planReview: PlanReviewState | null
+  /** The review in flight, step by step, or null when none is running. */
+  review: ReviewProgress | null
 }
 
 /**

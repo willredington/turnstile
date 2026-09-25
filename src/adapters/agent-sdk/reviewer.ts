@@ -9,9 +9,10 @@ import {
 } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import type { Reviewer, ReviewInput } from '../../core/ports.ts'
+import { describeReviewCall } from '../../core/reviewProgress.ts'
 import { groupFindings } from '../../core/reviewSubmission.ts'
 import { isReadOnlyCall, reservedPathIn } from '../../core/toolSafety.ts'
-import type { Finding } from '../../core/types.ts'
+import type { Finding, ReviewerUpdate } from '../../core/types.ts'
 import { protectionOptions } from './client.ts'
 import { resolveExecutable } from './resolveExecutable.ts'
 
@@ -192,7 +193,7 @@ export function connectReviewer(options: ReviewerOptions): Reviewer {
   const canUseTool = reviewerCanUseTool(options.reservedPaths ?? [])
 
   return {
-    async review(input) {
+    async review(input, onProgress) {
       const reviewed = input.files.map((file) => file.path)
       let accepted: Map<string, Finding[]> | null = null
       const server = createSdkMcpServer({
@@ -243,9 +244,43 @@ export function connectReviewer(options: ReviewerOptions): Reviewer {
           : { pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable }),
       }
 
+      // Progress is for the reader's eyes only: a listener that throws must not cost the review.
+      let progress: ReviewerUpdate = { step: 'starting', toolCalls: 0, current: null }
+      const report = (next: Partial<ReviewerUpdate>): void => {
+        progress = { ...progress, ...next }
+        try {
+          onProgress?.(progress)
+        } catch {
+          // See above.
+        }
+      }
+      // An assistant message can arrive more than once carrying the same block.
+      const seenCalls = new Set<string>()
+
       let ending = 'ended without submitting findings'
+      report({})
       try {
         for await (const message of queryFn({ prompt, options: sdkOptions })) {
+          if (message.type === 'system' && message.subtype === 'init') {
+            report({ step: 'investigating' })
+            continue
+          }
+          if (message.type === 'assistant') {
+            for (const block of message.message.content) {
+              if (block.type !== 'tool_use' || seenCalls.has(block.id)) continue
+              seenCalls.add(block.id)
+              if (isSubmitTool(block.name)) {
+                report({ step: 'submitting', current: 'submitting findings' })
+              } else {
+                report({
+                  step: 'investigating',
+                  toolCalls: progress.toolCalls + 1,
+                  current: describeReviewCall(input.root, block.name, block.input),
+                })
+              }
+            }
+            continue
+          }
           if (message.type !== 'result') continue
           if (message.subtype !== 'success')
             ending = `stopped (${message.subtype}) before submitting findings`

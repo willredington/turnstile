@@ -17,6 +17,7 @@ import { OpenTabs } from './OpenTabs.tsx'
 import { PermissionOverlay } from './PermissionOverlay.tsx'
 import { PlanView } from './PlanView.tsx'
 import { QuestionOverlay } from './QuestionOverlay.tsx'
+import { ReviewProgressBar } from './ReviewProgress.tsx'
 import { SettingsDialog } from './SettingsDialog.tsx'
 import { TopBar } from './TopBar.tsx'
 import { UntrackedPanel } from './UntrackedPanel.tsx'
@@ -56,6 +57,7 @@ const EMPTY: ClientState = {
   contextSize: null,
   planMode: 'default',
   planReview: null,
+  review: null,
   tracking: 'unknown',
   cwd: '',
 }
@@ -543,6 +545,8 @@ export function App() {
         autoMode={autoMode.status}
         onSettings={openSettings}
       />
+
+      {state.review !== null && <ReviewProgressBar review={state.review} />}
 
       {state.tracking === 'not-git' ? (
         <UntrackedPanel cwd={state.cwd} />

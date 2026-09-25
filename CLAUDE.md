@@ -234,6 +234,14 @@ layers even for something that feels small.
     another file (a caller the change broke) goes on the file's change when there is only one;
     everything else that lands on no chunk goes to `SessionState.fileFindings`, shown at the top
     of the file pane and counted toward the file's level (`ChangedFiles.tsx`'s `worstRisk`).
+  - **Progress:** `SessionState.review` (`ReviewProgress`) is the review in flight, shown as a
+    strip under the header (`ReviewProgress.tsx`): its step out of `REVIEW_STEPS` (preparing →
+    starting → investigating → submitting), the reviewer's call count and latest call
+    (`core/reviewProgress.ts`'s `describeReviewCall`), and elapsed time against `timeoutMs`. The
+    reviewer reports through `Reviewer.review`'s `onProgress`: `system/init` moves it to
+    investigating, each new `tool_use` block counts once, `submit_findings` moves it to
+    submitting. Null again however the run ends. Added because a review is a multi-minute agent
+    run, and a bare spinner could not tell that apart from a hang.
   - **Failure:** `onFailed` records the reason per file; `liveChunks` shows `pending` with
     "Review failed: …". The next editing turn or **Review now** retries it.
 - **`src/adapters/agent-sdk/reviewer.ts`** + **`src/core/reviewSubmission.ts`** — the reviewer:

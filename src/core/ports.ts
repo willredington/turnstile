@@ -18,6 +18,7 @@ import type {
   PatchKind,
   PlanModeStatus,
   RepoStatus,
+  ReviewerUpdate,
   SessionState,
   SessionSummary,
   SnapshotId,
@@ -379,7 +380,11 @@ export interface Reviewer {
    * nothing — a review with no findings is still a review. A finding may sit in any file (a
    * caller the change broke); it is listed under the reviewed file whose change caused it.
    */
-  review(input: ReviewInput): Promise<Map<string, Finding[]>>
+  review(
+    input: ReviewInput,
+    /** Told as the run moves through its steps and makes each call — see `ReviewStep`. */
+    onProgress?: (update: ReviewerUpdate) => void,
+  ): Promise<Map<string, Finding[]>>
 }
 
 export type ReviewInput = {

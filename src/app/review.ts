@@ -2,7 +2,7 @@ import type { RiskBarConfig } from '../core/config.ts'
 import type { ReviewedFile, Reviewer, RootHandle, RootRegistry, Telemetry } from '../core/ports.ts'
 import { skipReasons } from '../core/riskbar.ts'
 import { noopTelemetry } from '../core/telemetry.ts'
-import type { StoredReview } from '../core/types.ts'
+import type { ReviewerUpdate, StoredReview } from '../core/types.ts'
 import { captureBoardFor, chunksOf, fileHashes } from './board.ts'
 
 /**
@@ -32,6 +32,8 @@ export type ReviewDeps = {
   telemetry?: Telemetry
   /** A review started, over these files. */
   onReviewing?: (root: string, paths: string[]) => void
+  /** The reviewer moved on a step, or made another call. */
+  onProgress?: (root: string, update: ReviewerUpdate) => void
   /** The review finished: one entry per file it covered. */
   onReviewed?: (root: string, reviews: StoredReview[]) => void
   /** The review failed. Its files stay unreviewed until the next one. */
@@ -91,7 +93,11 @@ async function reviewRoot(handle: RootHandle, deps: ReviewDeps): Promise<ReviewR
     const byFile = await telemetry.span(
       'turnstile.review.model',
       { 'turnstile.files': files.length },
-      () => deps.reviewer.review({ root: handle.root, files, diff: capped(patches.join('\n')) }),
+      () =>
+        deps.reviewer.review(
+          { root: handle.root, files, diff: capped(patches.join('\n')) },
+          (update) => deps.onProgress?.(handle.root, update),
+        ),
     )
 
     const reviewedAt = new Date().toISOString()

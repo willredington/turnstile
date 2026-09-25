@@ -148,6 +148,7 @@ export function createSession(deps: SessionDeps): Session {
     contextSize: null,
     planMode: 'default',
     planReview: null,
+    review: null,
   }
 
   const mintSessionId = deps.mintSessionId ?? (() => crypto.randomUUID())
@@ -247,6 +248,7 @@ export function createSession(deps: SessionDeps): Session {
     reviews.clear()
     reviewing.clear()
     failed.clear()
+    if (state.review !== null) update({ review: null })
   }
 
   /** The live session's stored reviews, as it opens. Unreadable reads as none reviewed. */
@@ -322,7 +324,21 @@ export function createSession(deps: SessionDeps): Session {
           reviewing.add(noteFileKey(root, path))
           failed.delete(noteFileKey(root, path))
         }
+        update({
+          review: {
+            step: 'preparing',
+            files: paths,
+            startedAt: new Date().toISOString(),
+            timeoutMs: config.review.timeoutMs,
+            toolCalls: 0,
+            current: null,
+          },
+        })
         render()
+      },
+      onProgress: (_root, progress) => {
+        if (!live() || state.review === null) return
+        update({ review: { ...state.review, ...progress } })
       },
       onReviewed: (root, stored) => {
         if (!live()) return
@@ -330,6 +346,7 @@ export function createSession(deps: SessionDeps): Session {
           reviews.set(noteFileKey(root, entry.path), entry)
           reviewing.delete(noteFileKey(root, entry.path))
         }
+        update({ review: null })
         render()
         deps.findings.put(sessionId, stored).catch(persistFailed)
       },
@@ -339,8 +356,12 @@ export function createSession(deps: SessionDeps): Session {
           reviewing.delete(noteFileKey(root, path))
           failed.set(noteFileKey(root, path), message)
         }
+        update({ review: null })
         render()
       },
+    }).finally(() => {
+      // Whatever ended the run, the bar does not outlive it.
+      if (live() && state.review !== null) update({ review: null })
     })
   }, backgroundFailure('The review'))
 
