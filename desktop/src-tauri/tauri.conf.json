@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Turnstile",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "identifier": "dev.turnstile.desktop",
   "build": {
     "frontendDist": "../src",
@@ -25,8 +25,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/turnstile"],
-    "resources": ["resources/claude-cli"],
+    "externalBin": [
+      "binaries/turnstile"
+    ],
+    "resources": [
+      "resources/claude-cli"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
